@@ -89,13 +89,12 @@ pub fn ensure_engine_running(port: u16) -> Result<Option<Child>, String> {
     }
 }
 
-pub fn ping_engine(port: u16) -> Result<String, String> {
+fn exchange(port: u16, msg: &EditorToEngine) -> Result<String, String> {
     let mut stream =
         TcpStream::connect_timeout(&ipc_addr(port), Duration::from_secs(2)).map_err(|e| {
             format!("connect {}: {e}", ipc_addr(port))
         })?;
-    let msg = EditorToEngine::Ping { nonce: 42 };
-    let bytes = encode_editor_message(&msg).map_err(|e| e.to_string())?;
+    let bytes = encode_editor_message(msg).map_err(|e| e.to_string())?;
     stream
         .write_all(&bytes)
         .map_err(|e| format!("write: {e}"))?;
@@ -105,4 +104,18 @@ pub fn ping_engine(port: u16) -> Result<String, String> {
         .map_err(|e| format!("read: {e}"))?;
     let reply = decode_engine_message(&buf[..n]).map_err(|e| e.to_string())?;
     Ok(format!("{reply:?}"))
+}
+
+pub fn ping_engine(port: u16) -> Result<String, String> {
+    exchange(port, &EditorToEngine::Ping { nonce: 42 })
+}
+
+/// Save JSON level path the engine can read (use an absolute path when possible).
+pub fn push_level_path(port: u16, path: &str) -> Result<String, String> {
+    exchange(
+        port,
+        &EditorToEngine::LoadLevelFromPath {
+            path: path.to_string(),
+        },
+    )
 }

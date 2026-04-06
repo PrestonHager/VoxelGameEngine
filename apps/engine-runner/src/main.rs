@@ -4,6 +4,7 @@ mod ipc;
 
 use engine_core::EngineState;
 use render_vulkan::{RenderError, VulkanRenderer};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info};
@@ -16,9 +17,10 @@ fn main() {
     logging::init();
     info!("engine-runner starting");
 
+    let (ipc_tx, ipc_rx) = channel();
     if let Ok(port_s) = std::env::var("VGE_IPC_PORT") {
         if let Ok(port) = port_s.parse::<u16>() {
-            ipc::spawn_listener(port);
+            ipc::spawn_listener(port, ipc_tx);
         }
     }
 
@@ -36,6 +38,7 @@ fn main() {
         state: EngineState::default(),
         last: Instant::now(),
         spin: 0.0f32,
+        ipc_rx,
     };
 
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -49,6 +52,7 @@ struct RunnerApp {
     state: EngineState,
     last: Instant,
     spin: f32,
+    ipc_rx: std::sync::mpsc::Receiver<ipc::EngineIpcOp>,
 }
 
 impl ApplicationHandler for RunnerApp {
@@ -87,6 +91,23 @@ impl ApplicationHandler for RunnerApp {
                 let dt = now.duration_since(self.last).as_secs_f32();
                 self.last = now;
                 self.spin += dt * 0.7;
+
+                while let Ok(op) = self.ipc_rx.try_recv() {
+                    match op {
+                        ipc::EngineIpcOp::LoadLevelFromPath(path) => {
+                            match std::fs::read_to_string(&path) {
+                                Ok(s) => match scene::Level::from_json_str(&s) {
+                                    Ok(level) => {
+                                        self.state.apply_level(&level);
+                                        info!("Loaded level from {path}");
+                                    }
+                                    Err(e) => error!("level JSON {path}: {e}"),
+                                },
+                                Err(e) => error!("read level file {path}: {e}"),
+                            }
+                        }
+                    }
+                }
 
                 let steps = ((dt * 60.0).floor() as u32).clamp(1, 5);
                 for _ in 0..steps {

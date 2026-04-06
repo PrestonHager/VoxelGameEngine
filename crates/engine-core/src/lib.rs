@@ -1,9 +1,10 @@
 //! Application loop: fixed-step ECS tick, camera, optional voxel mesh sampling for instances.
 
-use ecs::{Position, Velocity, World};
+use ecs::{Position, PrefabRef, Velocity, World};
 use glam::{IVec3, Mat4, Vec3};
 use meshing::dual_contouring::{extract_from_chunk_scalar, MeshBuffers};
 use physics::PhysicsWorld;
+use scene::{Level, PlacedObject, TerrainLayer, TerrainMode};
 use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
@@ -21,36 +22,86 @@ pub struct EngineState {
     pub time: f32,
 }
 
-impl Default for EngineState {
-    fn default() -> Self {
-        let mut world = World::default();
-        world.spawn_with(
-            Position(Vec3::new(0.0, 0.0, 0.0)),
-            Some(Velocity(Vec3::new(0.2, 0.1, 0.0))),
-        );
-        world.spawn_with(Position(Vec3::new(3.0, 1.0, 2.0)), None);
-
-        let mut vw = ChunkWorld::new(16);
-        // small hill
-        for x in 4..12 {
-            for z in 4..12 {
-                vw.set_voxel_world(x, 0, z, 1);
-                if (x + z) % 3 == 0 {
-                    vw.set_voxel_world(x, 1, z, 1);
+fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
+    match terrain.mode {
+        TerrainMode::Flat => {
+            let mat = terrain.surface_material.max(1);
+            let top = terrain.base_height_voxels.max(0);
+            for x in 0..32i32 {
+                for z in 0..32i32 {
+                    for y in 0..=top {
+                        vw.set_voxel_world(x, y, z, mat);
+                    }
+                }
+            }
+            // small hill (authoring-friendly default detail)
+            for x in 4..12 {
+                for z in 4..12 {
+                    let wy = top + 1;
+                    vw.set_voxel_world(x, wy, z, mat);
+                    if (x + z) % 3 == 0 {
+                        vw.set_voxel_world(x, wy + 1, z, mat);
+                    }
                 }
             }
         }
+    }
+}
+
+impl EngineState {
+    /// Replace ECS + terrain from a serialized level (editor push / load).
+    pub fn from_level(level: &Level) -> Self {
+        let mut world = World::default();
+        for o in &level.objects {
+            if !o.visible {
+                continue;
+            }
+            world.spawn_prefab(
+                Position(Vec3::from_array(o.position)),
+                PrefabRef(o.prefab_id),
+            );
+        }
+
+        let mut vw = ChunkWorld::new(16);
+        apply_terrain_layer(&mut vw, &level.terrain);
 
         Self {
             world,
             voxel_world: vw,
             physics: PhysicsWorld::demo_stack(),
             mesh_scratch: MeshBuffers::default(),
-            camera_pos: Vec3::new(8.0, 10.0, 14.0),
-            yaw: -0.5,
+            camera_pos: Vec3::new(12.0, 14.0, 18.0),
+            yaw: -0.55,
             pitch: -0.35,
             time: 0.0,
         }
+    }
+
+    pub fn apply_level(&mut self, level: &Level) {
+        *self = Self::from_level(level);
+    }
+}
+
+impl Default for EngineState {
+    fn default() -> Self {
+        let mut level = Level {
+            name: "Demo".into(),
+            ..Default::default()
+        };
+        level.objects.push(PlacedObject {
+            instance_id: 1,
+            prefab_id: scene::ids::SPAWN_POINT,
+            name: "Spawn".into(),
+            position: [3.0, 1.0, 2.0],
+            visible: true,
+        });
+        let mut s = Self::from_level(&level);
+        // One dynamic body for integration demo (not yet in level format).
+        s.world.spawn_with(
+            Position(Vec3::new(0.0, 0.0, 0.0)),
+            Some(Velocity(Vec3::new(0.2, 0.1, 0.0))),
+        );
+        s
     }
 }
 
@@ -107,7 +158,6 @@ impl EngineState {
             .map(|(_, p)| [p.0.x, p.0.y, p.0.z])
             .collect();
 
-        // Downsample mesh vertices as instance roots (visual hack; real path: dedicated mesh pipeline)
         let step = (self.mesh_scratch.positions.len() / 256).max(1);
         for (i, p) in self.mesh_scratch.positions.iter().enumerate() {
             if i % step == 0 {

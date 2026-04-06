@@ -5,3 +5,8 @@
 /.idea
 /.vscode
 *.spv.tmp
+
+# VGE files
+*.vge.json
+*.vge.json.gz
+*.vge

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 protocol = { path = "../../shared/protocol" }
+scene = { path = "../../crates/scene" }
 logging = { path = "../../crates/logging" }
 tracing.workspace = true
 eframe = "0.30"

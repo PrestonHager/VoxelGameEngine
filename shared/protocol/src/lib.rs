@@ -14,6 +14,10 @@ pub enum EditorToEngine {
     LoadWorld {
         path: String,
     },
+    /// Engine reads JSON (`scene::Level`) from this path and replaces the running scene.
+    LoadLevelFromPath {
+        path: String,
+    },
     SetBlock {
         x: i32,
         y: i32,

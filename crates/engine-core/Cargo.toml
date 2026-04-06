@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ecs = { path = "../ecs" }
+scene = { path = "../scene" }
 voxel = { path = "../voxel" }
 meshing = { path = "../meshing" }
 physics = { path = "../physics" }

@@ -1,0 +1,10 @@
+[package]
+name = "scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Prefab catalog and serializable level/scene documents for editor and engine"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

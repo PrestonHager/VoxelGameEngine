@@ -30,7 +30,7 @@ Terrain (Dynamic / Infinite)
 
 Workspace Layout (Cargo)
 
-/crates engine-core ecs render-vulkan voxel meshing physics assets
+/crates engine-core ecs scene render-vulkan voxel meshing physics assets
 scripting api platform logging
 
 /apps editor engine-runner
@@ -38,6 +38,12 @@ scripting api platform logging
 /shared protocol formats
 
 /docs source
+
+Documentation (human guides)
+
+-   README.md — build, editor quick start, prefab ID table, level JSON overview
+-   docs/source/editor.rst — editor panels, workflow, env vars, Push to engine
+-   docs/source/prefabs.rst — built-in prefab catalog and stable IDs
 
 Architecture
 
