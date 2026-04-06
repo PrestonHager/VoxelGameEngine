@@ -3,7 +3,9 @@
 use crate::launcher;
 use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner};
 use eframe::egui;
-use eframe::egui::{menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
+use eframe::egui::{
+    menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke,
+};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
 use std::path::Path;
@@ -287,7 +289,8 @@ pub fn draw_editor_ui(
                     }
                 }
                 if let Some(new_sel) = assign_script {
-                    if let Some(obj) = model.level.objects.iter_mut().find(|o| o.instance_id == id) {
+                    if let Some(obj) = model.level.objects.iter_mut().find(|o| o.instance_id == id)
+                    {
                         obj.script_asset_id = new_sel;
                     }
                 }
@@ -367,8 +370,12 @@ pub fn draw_editor_ui(
                 FpsOverlayCorner::BottomRight => egui::pos2(max_x - box_w - pad, max_y + pad),
             };
             let screen = ctx.screen_rect();
-            pos.x = pos.x.clamp(screen.left() + 4.0, screen.right() - box_w - 4.0);
-            pos.y = pos.y.clamp(screen.top() + 4.0, screen.bottom() - box_h - 4.0);
+            pos.x = pos
+                .x
+                .clamp(screen.left() + 4.0, screen.right() - box_w - 4.0);
+            pos.y = pos
+                .y
+                .clamp(screen.top() + 4.0, screen.bottom() - box_h - 4.0);
             egui::Area::new("fps_overlay".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(pos)
@@ -483,7 +490,11 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
             }
         }
         if is_embedded {
-            let play = if model.play_mode_active { "■ Stop" } else { "▶ Play" };
+            let play = if model.play_mode_active {
+                "■ Stop"
+            } else {
+                "▶ Play"
+            };
             if ui.button(play).clicked() {
                 if model.play_mode_active {
                     model.stop_play_mode("Play mode stopped.");
@@ -649,7 +660,10 @@ fn draw_project_tree(ui: &mut egui::Ui, model: &mut EditorModel, root: &Path, di
         if path.is_dir() {
             let selected = model.selected_asset_rel_dir_normalized() == rel;
             ui.horizontal(|ui| {
-                if ui.selectable_label(selected, format!("📁 {name}")).clicked() {
+                if ui
+                    .selectable_label(selected, format!("📁 {name}"))
+                    .clicked()
+                {
                     model.asset_browser_selected_rel_dir = rel.clone();
                 }
             });
@@ -718,9 +732,12 @@ fn draw_code_editor_window(ctx: &egui::Context, model: &mut EditorModel) {
                 model.code_editor_dirty = true;
             }
             if !model.code_editor_status.is_empty() {
-                ui.label(egui::RichText::new(&model.code_editor_status).small().weak());
+                ui.label(
+                    egui::RichText::new(&model.code_editor_status)
+                        .small()
+                        .weak(),
+                );
             }
         });
     model.code_editor_open = open;
 }
-

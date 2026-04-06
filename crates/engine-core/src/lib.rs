@@ -173,7 +173,14 @@ impl EngineState {
         self.mouse_delta = (0.0, 0.0);
         if let Some(s) = &self.script {
             let map = &self.entity_by_instance;
-            if let Err(e) = s.tick(&mut self.world, map, FIXED_DT, mouse_dx, mouse_dy, mouse_pos) {
+            if let Err(e) = s.tick(
+                &mut self.world,
+                map,
+                FIXED_DT,
+                mouse_dx,
+                mouse_dy,
+                mouse_pos,
+            ) {
                 s.push_host_log(format!("[lua-error] {e}"));
                 tracing::warn!(target = "script", "lua tick: {e}");
             }
