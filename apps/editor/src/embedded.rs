@@ -202,7 +202,6 @@ impl GlutinWindowContext {
         use glutin::display::GlDisplay;
         self.gl_display.get_proc_address(addr)
     }
-
 }
 
 /// Present one Vulkan frame to the engine window.
@@ -241,7 +240,10 @@ fn render_engine_frame(inner: &mut Inner) {
 /// not receiving redraw events, so scripts still run during Play mode.
 fn tick_engine_simulation(inner: &mut Inner) {
     let now = Instant::now();
-    let dt = now.duration_since(inner.last_engine).as_secs_f32().min(0.25);
+    let dt = now
+        .duration_since(inner.last_engine)
+        .as_secs_f32()
+        .min(0.25);
     inner.last_engine = now;
     inner.sim_accum_s += dt;
     let fixed_dt = 1.0 / 60.0;

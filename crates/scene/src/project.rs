@@ -81,15 +81,22 @@ pub fn resolve_project_path(project_root: &Path, rel_path: &str) -> Result<PathB
     Ok(project_root.join(rel))
 }
 
-pub fn make_project_relative_path(project_root: &Path, abs_path: &Path) -> Result<String, ProjectError> {
+pub fn make_project_relative_path(
+    project_root: &Path,
+    abs_path: &Path,
+) -> Result<String, ProjectError> {
     // Try fast path first.
     let rel = match abs_path.strip_prefix(project_root) {
         Ok(rel) => rel.to_path_buf(),
         Err(_) => {
             // On Windows, canonicalized paths may use verbatim prefixes (\\?\) which makes a
             // lexical strip_prefix against a non-canonical root fail. Normalize both sides.
-            let root_norm = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
-            let abs_norm = abs_path.canonicalize().unwrap_or_else(|_| abs_path.to_path_buf());
+            let root_norm = project_root
+                .canonicalize()
+                .unwrap_or_else(|_| project_root.to_path_buf());
+            let abs_norm = abs_path
+                .canonicalize()
+                .unwrap_or_else(|_| abs_path.to_path_buf());
             abs_norm
                 .strip_prefix(&root_norm)
                 .map_err(|_| ProjectError::PathTraversal)?
@@ -233,4 +240,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 }
-
