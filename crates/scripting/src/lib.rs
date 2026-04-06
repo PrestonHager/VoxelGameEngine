@@ -4,7 +4,7 @@
 
 mod hooks;
 
-pub use hooks::ScriptHost;
+pub use hooks::{CursorCommands, ScriptHost};
 
 use mlua::Lua;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};

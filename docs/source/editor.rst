@@ -3,10 +3,16 @@
 Editor (MVP)
 ============
 
-The **editor** authors **levels** (JSON), manages a **built-in prefab library**, and can run in two modes:
+The **editor** authors level JSON, manages prefab instances and project assets, and runs in two modes:
 
-* **External engine (default):** ``eframe`` + optional auto-launch of the same binary with the ``engine-runner`` subcommand; **Push** uses ``shared/protocol`` (``LoadLevelFromPath``).
-* **Embedded:** set ``VGE_EMBEDDED=1`` — same binary runs **egui** (OpenGL via glutin) and a second **Vulkan** window, parented to the editor on **Windows** and **X11** when the platform allows. **Push** applies the level **in-process** (no IPC).
+* **Embedded (default):** one ``editor`` process with egui UI plus an in-process engine viewport.
+* **External engine:** separate editor UI process and engine host process (``editor engine-runner``) communicating over localhost IPC.
+
+Mode selection uses this precedence:
+
+1. CLI flags: ``--no-embedded`` forces external, ``--embedded`` or ``-e`` forces embedded.
+2. ``VGE_EMBEDDED`` env var (``1/true/yes/on`` or ``0/false/no/off``).
+3. Saved preferences default (embedded by default unless changed in Preferences).
 
 Launching
 ---------
@@ -14,7 +20,7 @@ Launching
 **Requirements**
 
 - Same prerequisites as the main engine (Rust, Vulkan where applicable).
-- For **Push to engine**, an **engine host** (``editor engine-runner``) must be listening on the same IPC port as the editor.
+- In external mode, the editor and engine host must use the same IPC port.
 
 **Environment**
 
@@ -29,7 +35,7 @@ Launching
    * - ``VGE_ENGINE_EXE``
      - Optional full path to the **editor** binary (or legacy standalone ``engine-runner``) when auto-spawn cannot use ``current_exe()``.
    * - ``VGE_EMBEDDED``
-     - Set to ``1`` for in-process Vulkan **Engine view** (child window) + egui.
+     - Overrides saved preference default. Truthy values force embedded; falsy values force external.
    * - ``VGE_LUA_SCRIPT``
      - Optional ``.lua`` path for ECS hooks (see :doc:`scripting`).
 
@@ -59,9 +65,15 @@ On Windows (PowerShell):
    $env:VGE_IPC_PORT = "7878"
    cargo run -p editor
 
-If the editor starts **without** an engine on the port (non-embedded), it tries to spawn **``editor engine-runner``** using the same executable (typical after ``cargo run``: ``target/debug/editor``). Set ``VGE_ENGINE_EXE`` if the host binary is not discoverable from ``current_exe()``.
+If external mode starts without an engine listening on the port, the editor attempts to spawn an engine host automatically. Resolution order is:
 
-**Embedded launch**
+1. ``VGE_ENGINE_EXE`` path
+2. current executable path, launched with ``engine-runner``
+3. legacy sibling ``engine-runner(.exe)``
+
+Startup waits up to 15 seconds for host readiness.
+
+**Embedded launch (explicit override)**
 
 .. code-block:: bash
 
@@ -89,18 +101,25 @@ Collapsible groups by category (**Primitive**, **Gameplay**, **Environment**, **
 * **Ping engine** / **Retry start engine** — external mode only.
 * **Save level** — writes JSON to the level file path.
 * **Load level** — reads JSON from that path.
-* **Push to engine** — external: save + IPC ``LoadLevelFromPath``; embedded: save (optional) + apply level to the in-process engine state.
+* **Push to engine** — always saves first, then:
+
+  * external mode: sends IPC ``LoadLevelFromPath`` to engine host
+  * embedded mode: applies the current level in-process
+* **Play / Stop** (embedded mode):
+
+  * entering Play captures engine input in the viewport and hides cursor
+  * ``Esc`` or Stop releases capture and exits Play mode
 
 Workflow
 --------
 
-1. Start **``editor engine-runner``** with ``VGE_IPC_PORT`` set (or let the editor spawn it).
-2. Start **editor** with the **same** port.
+1. Start the editor (embedded default), or start in external mode with ``--no-embedded``.
+2. If using external mode, start ``editor engine-runner`` with matching ``VGE_IPC_PORT`` (or let the editor spawn it).
 3. Add objects from the library; adjust transforms and terrain.
 4. **Save level** to e.g. ``demo_level.vge.json``.
-5. **Push to engine** to hot-reload that file in the running engine.
+5. **Push to engine** to save and apply/reload the level.
 
-**Note:** Push requires the file to exist on disk and be readable by the **engine host** (same machine; path is canonicalized on the editor side). Network shares or different working directories may need an explicit absolute path in **Level file**.
+In external mode, Push requires the level path to be readable by the engine host process on the same machine.
 
 Level file format
 -----------------
@@ -114,10 +133,17 @@ Levels are JSON documents produced by the ``scene`` crate (``Level::to_json_pret
 
 See :doc:`prefabs` for stable ``prefab_id`` values.
 
+Projects and assets
+-------------------
+
+Project workflows are implemented and use binary ``.vge`` project files plus project-relative asset paths.
+See :doc:`projects` for project scaffold layout, path rules, and current capabilities.
+
 Further reading
 ---------------
 
+* :doc:`projects` — project workflow, binary ``.vge`` files, path validation, and current limitations.
 * :doc:`prefabs` — built-in prefab IDs and categories.
-* :doc:`scripting` — Lua hooks and ``VGE_LUA_SCRIPT``.
+* :doc:`scripting` — Lua hooks, per-object script assets, and sandbox details.
 * Repository ``README.md`` — build matrix and crate overview.
 * ``agents.md`` — project mission and roadmap phases.

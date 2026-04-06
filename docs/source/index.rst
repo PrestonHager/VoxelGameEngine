@@ -1,20 +1,21 @@
 Voxel game engine
 =================
 
-Rust + Vulkan workspace: custom ECS, chunked voxels, meshing, optional **editor** with IPC to an **external engine host** (same binary: ``editor engine-runner``).
+Rust + Vulkan workspace with custom ECS, chunked voxels, meshing, and a unified editor binary that supports both embedded and external engine-runner workflows.
 
 .. toctree::
    :maxdepth: 2
    :caption: User guide
 
    editor
+   projects
    prefabs
    scripting
 
 Other references
 ----------------
 
-* Repository ``README.md`` — prerequisites, ``cargo`` commands, crate index.
+* Repository ``README.md`` — prerequisites, ``cargo`` commands, project workflow, crate index.
 * ``agents.md`` — architecture decisions and phased roadmap.
 
 Build these docs locally

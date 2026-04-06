@@ -5,8 +5,9 @@ use glam::{IVec3, Mat4, Vec3};
 use meshing::dual_contouring::{extract_from_chunk_scalar, MeshBuffers};
 use physics::PhysicsWorld;
 use scene::{CameraAuthoring, Level, PlacedObject, TerrainLayer, TerrainMode};
-use scripting::ScriptHost;
+use scripting::{CursorCommands, ScriptHost};
 use std::collections::HashMap;
+use std::path::Path;
 use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
@@ -25,6 +26,10 @@ pub struct EngineState {
     /// Maps level `instance_id` → ECS entity (for Lua hooks).
     pub entity_by_instance: HashMap<u64, ecs::Entity>,
     pub script: Option<ScriptHost>,
+    pub last_cursor_pos: Option<(f64, f64)>,
+    pub mouse_pos: Option<(f32, f32)>,
+    pub mouse_delta: (f32, f32),
+    pub pending_cursor_commands: CursorCommands,
 }
 
 fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
@@ -54,6 +59,10 @@ fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
 
 impl EngineState {
     pub fn from_level(level: &Level) -> Self {
+        Self::from_level_with_asset_root(level, None)
+    }
+
+    pub fn from_level_with_asset_root(level: &Level, asset_root: Option<&Path>) -> Self {
         let mut world = World::default();
         let mut entity_by_instance = HashMap::new();
 
@@ -87,7 +96,7 @@ impl EngineState {
         let mut vw = ChunkWorld::new(16);
         apply_terrain_layer(&mut vw, &level.terrain);
 
-        let script = ScriptHost::from_level(level);
+        let script = ScriptHost::from_level_with_base(level, asset_root);
 
         Self {
             world,
@@ -100,11 +109,19 @@ impl EngineState {
             time: 0.0,
             entity_by_instance,
             script,
+            last_cursor_pos: None,
+            mouse_pos: None,
+            mouse_delta: (0.0, 0.0),
+            pending_cursor_commands: CursorCommands::default(),
         }
     }
 
     pub fn apply_level(&mut self, level: &Level) {
-        *self = Self::from_level(level);
+        *self = Self::from_level_with_asset_root(level, None);
+    }
+
+    pub fn apply_level_with_asset_root(&mut self, level: &Level, asset_root: Option<&Path>) {
+        *self = Self::from_level_with_asset_root(level, asset_root);
     }
 }
 
@@ -151,12 +168,56 @@ impl EngineState {
         self.world.system_integrate(FIXED_DT);
         self.physics.step();
         self.time += FIXED_DT;
+        let (mouse_dx, mouse_dy) = self.mouse_delta;
+        let mouse_pos = self.mouse_pos;
+        self.mouse_delta = (0.0, 0.0);
         if let Some(s) = &self.script {
             let map = &self.entity_by_instance;
-            if let Err(e) = s.tick(&mut self.world, map, FIXED_DT) {
+            if let Err(e) = s.tick(
+                &mut self.world,
+                map,
+                FIXED_DT,
+                mouse_dx,
+                mouse_dy,
+                mouse_pos,
+            ) {
+                s.push_host_log(format!("[lua-error] {e}"));
                 tracing::warn!(target = "script", "lua tick: {e}");
             }
+            let cmds = s.drain_cursor_commands();
+            self.pending_cursor_commands.center_mouse |= cmds.center_mouse;
+            if cmds.cursor_visible.is_some() {
+                self.pending_cursor_commands.cursor_visible = cmds.cursor_visible;
+            }
         }
+    }
+
+    pub fn on_cursor_moved(&mut self, x: f64, y: f64) {
+        if let Some((lx, ly)) = self.last_cursor_pos {
+            self.mouse_delta.0 += (x - lx) as f32;
+            self.mouse_delta.1 += (y - ly) as f32;
+        }
+        self.mouse_pos = Some((x as f32, y as f32));
+        self.last_cursor_pos = Some((x, y));
+    }
+
+    pub fn on_mouse_motion(&mut self, dx: f64, dy: f64) {
+        self.mouse_delta.0 += dx as f32;
+        self.mouse_delta.1 += dy as f32;
+    }
+
+    pub fn drain_script_logs(&self) -> Vec<String> {
+        if let Some(s) = &self.script {
+            s.drain_logs()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn take_cursor_commands(&mut self) -> CursorCommands {
+        let out = self.pending_cursor_commands;
+        self.pending_cursor_commands = CursorCommands::default();
+        out
     }
 
     /// First active camera rig in the world, if any.
@@ -196,7 +257,7 @@ impl EngineState {
             .unwrap_or(self.camera_pos)
     }
 
-    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 3]> {
+    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 6]> {
         let cam = self.camera_sample_position();
         let e = self.voxel_world.edge as i32;
         let cc = IVec3::new(
@@ -226,22 +287,25 @@ impl EngineState {
 
         let origin = Vec3::new((cc.x * e) as f32, (cc.y * e) as f32, (cc.z * e) as f32);
 
-        let mut inst: Vec<[f32; 3]> = self
+        let mut inst: Vec<[f32; 6]> = self
             .world
             .positions()
-            .map(|(_, p)| [p.0.x, p.0.y, p.0.z])
+            .map(|(e, p)| {
+                let r = self.world.rotation_of(e).map(|r| r.0).unwrap_or(Vec3::ZERO);
+                [p.0.x, p.0.y, p.0.z, r.x, r.y, r.z]
+            })
             .collect();
 
         let step = (self.mesh_scratch.positions.len() / 256).max(1);
         for (i, p) in self.mesh_scratch.positions.iter().enumerate() {
             if i % step == 0 {
                 let w = origin + *p;
-                inst.push([w.x, w.y, w.z]);
+                inst.push([w.x, w.y, w.z, 0.0, 0.0, 0.0]);
             }
         }
 
         if inst.is_empty() {
-            inst.push([0.0, 0.0, 0.0]);
+            inst.push([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         }
         inst.truncate(MAX_INSTANCES);
         inst

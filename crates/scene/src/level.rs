@@ -144,26 +144,46 @@ impl Level {
     }
 
     /// Resolve a stored asset path for loading (engine / tooling).
-    pub fn resolve_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+    ///
+    /// If `base_dir` is provided, relative paths are resolved against it.
+    /// Otherwise relative paths are resolved from current working directory.
+    pub fn resolve_asset_path_with_base(
+        &self,
+        asset_id: &str,
+        base_dir: Option<&Path>,
+    ) -> Option<PathBuf> {
         let rec = self.assets.iter().find(|a| a.id == asset_id)?;
         let p = Path::new(&rec.path);
         if p.is_absolute() {
             Some(p.to_path_buf())
         } else {
-            std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.join(p))
-                .and_then(|p| p.canonicalize().ok())
+            let base = match base_dir {
+                Some(dir) => dir.to_path_buf(),
+                None => std::env::current_dir().ok()?,
+            };
+            base.join(p).canonicalize().ok()
         }
     }
 
+    pub fn resolve_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+        self.resolve_asset_path_with_base(asset_id, None)
+    }
+
     /// Script assets only (for per-object Lua).
-    pub fn resolve_script_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+    pub fn resolve_script_asset_path_with_base(
+        &self,
+        asset_id: &str,
+        base_dir: Option<&Path>,
+    ) -> Option<PathBuf> {
         let rec = self.assets.iter().find(|a| a.id == asset_id)?;
         if rec.kind != AssetKind::Script {
             return None;
         }
-        self.resolve_asset_path(asset_id)
+        self.resolve_asset_path_with_base(asset_id, base_dir)
+    }
+
+    pub fn resolve_script_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+        self.resolve_script_asset_path_with_base(asset_id, None)
     }
 }
 

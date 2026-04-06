@@ -48,7 +48,9 @@ Documentation (human guides)
 
 Architecture
 
-Editor and engine run as separate processes communicating via IPC.
+Editor and engine support both:
+- embedded in-process runtime (default editor workflow)
+- separate processes communicating via IPC (`editor engine-runner`)
 
 Key Systems
 

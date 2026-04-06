@@ -25,6 +25,10 @@ pub struct Position(pub Vec3);
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Velocity(pub Vec3);
 
+/// Euler rotation in radians: pitch (x), yaw (y), roll (z).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rotation(pub Vec3);
+
 /// Stable prefab / object-type id from the scene library (rendering uses this later).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrefabRef(pub u32);
@@ -57,6 +61,7 @@ impl Default for CameraRig {
 struct Archetype {
     entities: Vec<Entity>,
     positions: Vec<Position>,
+    rotations: Vec<Rotation>,
     velocities: Vec<Velocity>,
 }
 
@@ -70,6 +75,7 @@ impl Archetype {
 struct ArchetypePosPrefab {
     entities: Vec<Entity>,
     positions: Vec<Position>,
+    rotations: Vec<Rotation>,
     prefabs: Vec<PrefabRef>,
 }
 
@@ -77,6 +83,7 @@ struct ArchetypePosPrefab {
 struct ArchetypePosCamera {
     entities: Vec<Entity>,
     positions: Vec<Position>,
+    rotations: Vec<Rotation>,
     cameras: Vec<CameraRig>,
 }
 
@@ -142,6 +149,7 @@ impl World {
             meta.row = arch.entities.len();
             arch.entities.push(entity);
             arch.positions.push(pos);
+            arch.rotations.push(Rotation::default());
             arch.velocities.push(v);
         } else {
             let arch = &mut self.archetype_pos_only;
@@ -149,6 +157,7 @@ impl World {
             meta.row = arch.entities.len();
             arch.entities.push(entity);
             arch.positions.push(pos);
+            arch.rotations.push(Rotation::default());
         }
 
         entity
@@ -164,6 +173,7 @@ impl World {
         meta.row = arch.entities.len();
         arch.entities.push(entity);
         arch.positions.push(pos);
+        arch.rotations.push(Rotation::default());
         arch.prefabs.push(prefab);
 
         entity
@@ -179,6 +189,8 @@ impl World {
         meta.row = arch.entities.len();
         arch.entities.push(entity);
         arch.positions.push(pos);
+        arch.rotations
+            .push(Rotation(Vec3::new(rig.pitch, rig.yaw, 0.0)));
         arch.cameras.push(rig);
 
         entity
@@ -217,6 +229,7 @@ impl World {
             let moved = arch.entities[last];
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
+            arch.rotations.swap_remove(row);
             if with_vel {
                 arch.velocities.swap_remove(row);
             }
@@ -226,6 +239,7 @@ impl World {
         } else {
             arch.entities.pop();
             arch.positions.pop();
+            arch.rotations.pop();
             if with_vel {
                 arch.velocities.pop();
             }
@@ -241,6 +255,7 @@ impl World {
             let moved = arch.entities[last];
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
+            arch.rotations.swap_remove(row);
             arch.prefabs.swap_remove(row);
             if let Some(m) = all_meta.get_mut(moved.index as usize) {
                 m.row = row;
@@ -248,6 +263,7 @@ impl World {
         } else {
             arch.entities.pop();
             arch.positions.pop();
+            arch.rotations.pop();
             arch.prefabs.pop();
         }
     }
@@ -261,6 +277,7 @@ impl World {
             let moved = arch.entities[last];
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
+            arch.rotations.swap_remove(row);
             arch.cameras.swap_remove(row);
             if let Some(m) = all_meta.get_mut(moved.index as usize) {
                 m.row = row;
@@ -268,6 +285,7 @@ impl World {
         } else {
             arch.entities.pop();
             arch.positions.pop();
+            arch.rotations.pop();
             arch.cameras.pop();
         }
     }
@@ -333,6 +351,78 @@ impl World {
             return false;
         }
         self.archetype_pos_vel.velocities[m.row] = vel;
+        true
+    }
+
+    pub fn rotation_of(&self, entity: Entity) -> Option<Rotation> {
+        let m = self.entities.get(entity.index as usize)?;
+        if !m.alive || m.generation != entity.generation {
+            return None;
+        }
+        Some(match m.archetype_id {
+            0 => self.archetype_pos_only.rotations[m.row],
+            1 => self.archetype_pos_vel.rotations[m.row],
+            2 => self.archetype_pos_prefab.rotations[m.row],
+            3 => self.archetype_pos_camera.rotations[m.row],
+            _ => return None,
+        })
+    }
+
+    pub fn set_rotation(&mut self, entity: Entity, rot: Rotation) -> bool {
+        let Some(m) = self.entities.get(entity.index as usize) else {
+            return false;
+        };
+        if !m.alive || m.generation != entity.generation {
+            return false;
+        }
+        let row = m.row;
+        match m.archetype_id {
+            0 => {
+                self.archetype_pos_only.rotations[row] = rot;
+                true
+            }
+            1 => {
+                self.archetype_pos_vel.rotations[row] = rot;
+                true
+            }
+            2 => {
+                self.archetype_pos_prefab.rotations[row] = rot;
+                true
+            }
+            3 => {
+                self.archetype_pos_camera.rotations[row] = rot;
+                let c = &mut self.archetype_pos_camera.cameras[row];
+                c.pitch = rot.0.x;
+                c.yaw = rot.0.y;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn camera_angles_of(&self, entity: Entity) -> Option<(f32, f32)> {
+        let m = self.entities.get(entity.index as usize)?;
+        if !m.alive || m.generation != entity.generation || m.archetype_id != 3 {
+            return None;
+        }
+        let c = self.archetype_pos_camera.cameras[m.row];
+        Some((c.yaw, c.pitch))
+    }
+
+    pub fn set_camera_angles(&mut self, entity: Entity, yaw: f32, pitch: f32) -> bool {
+        let Some(m) = self.entities.get(entity.index as usize) else {
+            return false;
+        };
+        if !m.alive || m.generation != entity.generation || m.archetype_id != 3 {
+            return false;
+        }
+        let row = m.row;
+        let c = &mut self.archetype_pos_camera.cameras[row];
+        c.yaw = yaw;
+        c.pitch = pitch;
+        let r = &mut self.archetype_pos_camera.rotations[row];
+        r.0.y = yaw;
+        r.0.x = pitch;
         true
     }
 

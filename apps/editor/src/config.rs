@@ -17,7 +17,7 @@ use tracing::debug;
 /// - `cargo run -p editor -- --no-embedded`
 /// - PowerShell: `$env:VGE_EMBEDDED = "0"; cargo run -p editor`
 /// - cmd: `set VGE_EMBEDDED=0 && cargo run -p editor`
-pub fn embedded_mode_requested() -> bool {
+pub fn embedded_mode_requested(default_embedded: bool) -> bool {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--no-embedded") {
         debug!(target: "vge_embedded", "embedded_mode_requested: false (--no-embedded)");
@@ -43,5 +43,5 @@ pub fn embedded_mode_requested() -> bool {
         from_env = ?from_env,
         "embedded_mode_requested (env)"
     );
-    from_env.unwrap_or(true)
+    from_env.unwrap_or(default_embedded)
 }

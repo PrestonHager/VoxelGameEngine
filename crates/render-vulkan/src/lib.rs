@@ -4,7 +4,7 @@ use ash::khr::{surface, swapchain};
 use ash::vk;
 use ash::vk::Handle;
 use ash::{Device, Entry, Instance};
-use bytemuck::{cast_slice, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::ffi::CStr;
@@ -66,11 +66,15 @@ fn cube_vertices() -> (Vec<Vertex>, Vec<u32>) {
         })
         .collect();
     let idx: Vec<u32> = vec![
-        0, 1, 2, 2, 3, 0, // bottom
+        0, 2, 1, 2, 0, 3, // bottom (match outward winding for back-face culling)
         4, 5, 6, 6, 7, 4, // top
         0, 1, 5, 5, 4, 0, 1, 2, 6, 6, 5, 1, 2, 3, 7, 7, 6, 2, 3, 0, 4, 4, 7, 3,
     ];
     (verts, idx)
+}
+
+fn debug_disable_backface_cull() -> bool {
+    std::env::var_os("VGE_DISABLE_BACKFACE_CULL").is_some()
 }
 
 /// `SurfaceCapabilitiesKHR::current_extent` is `(0,0)` on some Win32 surfaces (e.g. child windows)
@@ -160,6 +164,7 @@ pub struct VulkanRenderer {
     _debug_loader: ash::ext::debug_utils::Instance,
     #[cfg(debug_assertions)]
     _debug_messenger: vk::DebugUtilsMessengerEXT,
+    vsync_enabled: bool,
 }
 
 impl VulkanRenderer {
@@ -302,6 +307,7 @@ impl VulkanRenderer {
             _debug_loader: debug_loader,
             #[cfg(debug_assertions)]
             _debug_messenger: debug_messenger,
+            vsync_enabled: false,
         };
 
         r.create_swapchain(window, None)?;
@@ -346,11 +352,15 @@ impl VulkanRenderer {
             .or_else(|| formats.first())
             .ok_or_else(|| RenderError::Msg("no surface formats".into()))?;
 
-        let present_mode = present_modes
-            .iter()
-            .copied()
-            .find(|&m| m == vk::PresentModeKHR::MAILBOX)
-            .unwrap_or(vk::PresentModeKHR::FIFO);
+        let present_mode = if self.vsync_enabled {
+            vk::PresentModeKHR::FIFO
+        } else if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+            vk::PresentModeKHR::MAILBOX
+        } else if present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            vk::PresentModeKHR::IMMEDIATE
+        } else {
+            vk::PresentModeKHR::FIFO
+        };
 
         let sz = window.inner_size();
         let (iw, ih, force_inner) = match inner_size_override {
@@ -415,6 +425,20 @@ impl VulkanRenderer {
         self.swapchain_views = views?;
 
         Ok(())
+    }
+
+    /// # Safety
+    /// Same requirements as [`Self::resize`]. Recreates swapchain-dependent resources when changed.
+    pub unsafe fn set_vsync_enabled(
+        &mut self,
+        window: &Window,
+        enabled: bool,
+    ) -> Result<(), RenderError> {
+        if self.vsync_enabled == enabled {
+            return Ok(());
+        }
+        self.vsync_enabled = enabled;
+        self.resize(window)
     }
 
     fn destroy_swapchain_chain(&mut self) {
@@ -646,7 +670,7 @@ impl VulkanRenderer {
 
         let v_size = (verts.len() * size_of::<Vertex>()) as u64;
         let i_size = (idx.len() * size_of::<u32>()) as u64;
-        let inst_size = (MAX_INSTANCES * size_of::<[f32; 3]>()) as u64;
+        let inst_size = (MAX_INSTANCES * size_of::<[f32; 6]>()) as u64;
 
         let (vb, vm) = create_buffer(
             &self.device,
@@ -750,7 +774,7 @@ impl VulkanRenderer {
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: (size_of::<f32>() * 3) as u32,
+                stride: (size_of::<f32>() * 6) as u32,
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -772,6 +796,12 @@ impl VulkanRenderer {
                 binding: 1,
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: 0,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 3,
+                binding: 1,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 12,
             },
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -799,10 +829,17 @@ impl VulkanRenderer {
             .viewports(&viewports)
             .scissors(&scissors);
 
+        let disable_cull = debug_disable_backface_cull();
         let raster = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
+            // Default to back-face culling for normal rendering performance.
+            // Set VGE_DISABLE_BACKFACE_CULL=1 only when debugging winding/visibility.
+            .cull_mode(if disable_cull {
+                vk::CullModeFlags::NONE
+            } else {
+                vk::CullModeFlags::BACK
+            })
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
 
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
@@ -1025,7 +1062,7 @@ impl VulkanRenderer {
     /// Vulkan handles on `self` must remain valid; caller must not destroy the swapchain or device concurrently.
     pub unsafe fn draw_frame(
         &mut self,
-        instance_positions: &[[f32; 3]],
+        instance_data: &[[f32; 6]],
         view_proj: Mat4,
     ) -> Result<(), RenderError> {
         let frame = self.current_frame;
@@ -1050,8 +1087,8 @@ impl VulkanRenderer {
         };
         let image_index = image_index as usize;
 
-        let inst_n = instance_positions.len().min(MAX_INSTANCES);
-        let inst_bytes = inst_n * size_of::<[f32; 3]>();
+        let inst_n = instance_data.len().min(MAX_INSTANCES);
+        let inst_bytes = inst_n * size_of::<[f32; 6]>();
         if inst_n > 0 {
             let ptr = self.device.map_memory(
                 self.instance_mem,
@@ -1059,11 +1096,7 @@ impl VulkanRenderer {
                 inst_bytes as u64,
                 vk::MemoryMapFlags::empty(),
             )?;
-            std::ptr::copy_nonoverlapping(
-                instance_positions.as_ptr(),
-                ptr as *mut [f32; 3],
-                inst_n,
-            );
+            std::ptr::copy_nonoverlapping(instance_data.as_ptr(), ptr as *mut [f32; 6], inst_n);
             self.device.unmap_memory(self.instance_mem);
         }
 
@@ -1406,7 +1439,20 @@ fn create_buffer(
 }
 
 fn create_shader_module(device: &Device, code: &[u8]) -> Result<vk::ShaderModule, RenderError> {
-    let info = vk::ShaderModuleCreateInfo::default().code(cast_slice(code));
+    if code.len() % 4 != 0 {
+        return Err(RenderError::Msg(
+            "shader bytecode length must be a multiple of 4".into(),
+        ));
+    }
+
+    // SPIR-V is a u32 word stream. `include_bytes!` does not guarantee 4-byte alignment,
+    // so avoid `cast_slice` and decode into words explicitly.
+    let words: Vec<u32> = code
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+
+    let info = vk::ShaderModuleCreateInfo::default().code(&words);
     Ok(unsafe { device.create_shader_module(&info, None)? })
 }
 

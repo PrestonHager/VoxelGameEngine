@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info};
 use winit::application::ApplicationHandler;
+use winit::event::DeviceEvent;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
@@ -56,6 +57,17 @@ struct RunnerApp {
 }
 
 impl ApplicationHandler for RunnerApp {
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.state.on_mouse_motion(delta.0, delta.1);
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = platform::default_window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
@@ -86,6 +98,9 @@ impl ApplicationHandler for RunnerApp {
                 }
                 window.request_redraw();
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.state.on_cursor_moved(position.x, position.y);
+            }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let dt = now.duration_since(self.last).as_secs_f32();
@@ -96,7 +111,16 @@ impl ApplicationHandler for RunnerApp {
                             match std::fs::read_to_string(&path) {
                                 Ok(s) => match scene::Level::from_json_str(&s) {
                                     Ok(level) => {
-                                        self.state.apply_level(&level);
+                                        let project_root =
+                                            scene::discover_project_root_from_level_path(
+                                                std::path::Path::new(&path),
+                                            );
+                                        let fallback_root = std::path::Path::new(&path)
+                                            .parent()
+                                            .map(|p| p.to_path_buf());
+                                        let asset_root =
+                                            project_root.as_deref().or(fallback_root.as_deref());
+                                        self.state.apply_level_with_asset_root(&level, asset_root);
                                         info!("Loaded level from {path}");
                                     }
                                     Err(e) => error!("level JSON {path}: {e}"),

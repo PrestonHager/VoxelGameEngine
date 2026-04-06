@@ -1,11 +1,14 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{EditorMainTab, EditorModel};
+use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner};
 use eframe::egui;
-use eframe::egui::{menu, Button, Color32, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
+use eframe::egui::{
+    menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke,
+};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
+use std::path::Path;
 use tracing::debug;
 
 fn kb_open() -> KeyboardShortcut {
@@ -42,6 +45,12 @@ pub fn draw_editor_ui(
     model: &mut EditorModel,
     embedded: Option<&mut EngineState>,
 ) {
+    let is_embedded = embedded.is_some();
+    if is_embedded {
+        // Preferences are edited in a separate process; poll at a low cadence to
+        // pick up changes without re-reading from disk every frame.
+        model.reload_preferences_from_disk_if_due();
+    }
     if embedded.is_none() {
         model.engine_viewport_px = None;
         model.bootstrap_external();
@@ -54,6 +63,32 @@ pub fn draw_editor_ui(
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
+                if ui.button("New Project…").clicked() {
+                    model.new_project_dialog();
+                    ui.close_menu();
+                }
+                if ui.button("Open Project…").clicked() {
+                    model.open_project_dialog();
+                    ui.close_menu();
+                }
+                if ui.button("Save Project").clicked() {
+                    if let Err(e) = model.save_project_file() {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    } else {
+                        model.status.clear();
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Save Project As…").clicked() {
+                    model.save_project_as_dialog();
+                    ui.close_menu();
+                }
+                if ui.button("Preferences…").clicked() {
+                    model.open_preferences_window();
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui
                     .add(Button::new("Open…").shortcut_text(ctx.format_shortcut(&kb_open())))
                     .clicked()
@@ -82,6 +117,11 @@ pub fn draw_editor_ui(
                 }
             });
             ui.menu_button("Edit", |ui| {
+                if ui.button("Preferences…").clicked() {
+                    model.open_preferences_window();
+                    ui.close_menu();
+                }
+                ui.separator();
                 ui.add_enabled(false, Button::new("Undo"));
                 ui.add_enabled(false, Button::new("Redo"));
                 ui.separator();
@@ -170,6 +210,13 @@ pub fn draw_editor_ui(
             }
 
             if let Some(id) = model.selected_instance {
+                // Keep script assignment changes deferred to avoid mutable borrow conflicts.
+                let mut assign_script: Option<Option<String>> = None;
+                let mut browse_script = false;
+                if let Err(e) = model.ensure_project_scripts_registered() {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                }
                 if let Some(o) = model.level.objects.iter_mut().find(|o| o.instance_id == id) {
                     ui.separator();
                     ui.label(format!("Edit #{}", id));
@@ -210,15 +257,18 @@ pub fn draw_editor_ui(
                                 .selectable_label(o.script_asset_id.is_none(), "None")
                                 .clicked()
                             {
-                                o.script_asset_id = None;
+                                assign_script = Some(None);
                             }
                             for (id, name) in &scripts {
                                 let chosen = o.script_asset_id.as_deref() == Some(id.as_str());
                                 if ui.selectable_label(chosen, name).clicked() {
-                                    o.script_asset_id = Some(id.clone());
+                                    assign_script = Some(Some(id.clone()));
                                 }
                             }
                         });
+                    if ui.button("Browse script…").clicked() {
+                        browse_script = true;
+                    }
 
                     if o.prefab_id == ids::CAMERA {
                         let cam = o.camera.get_or_insert_with(Default::default);
@@ -236,6 +286,28 @@ pub fn draw_editor_ui(
                             ui.add(egui::DragValue::new(&mut cam.pitch_deg).speed(0.5));
                         });
                         ui.checkbox(&mut cam.active, "active (first active wins)");
+                    }
+                }
+                if let Some(new_sel) = assign_script {
+                    if let Some(obj) = model.level.objects.iter_mut().find(|o| o.instance_id == id)
+                    {
+                        obj.script_asset_id = new_sel;
+                    }
+                }
+                if browse_script {
+                    match model.browse_script_asset_for_object() {
+                        Ok(Some(asset_id)) => {
+                            if let Some(obj) =
+                                model.level.objects.iter_mut().find(|o| o.instance_id == id)
+                            {
+                                obj.script_asset_id = Some(asset_id);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            model.status.clone_from(&e);
+                            model.push_log(e);
+                        }
                     }
                 }
             }
@@ -276,6 +348,52 @@ pub fn draw_editor_ui(
             draw_assets_tab(ui, model);
         }
     });
+
+    draw_code_editor_window(ctx, model);
+
+    if is_embedded && model.preferences.show_fps_overlay {
+        if let Some((vx, vy, vw, vh)) = model.engine_viewport_px {
+            let ppp = ctx.pixels_per_point();
+            let min_x = vx as f32 / ppp;
+            let min_y = vy as f32 / ppp;
+            let max_x = (vx as f32 + vw as f32) / ppp;
+            let max_y = (vy as f32 + vh as f32) / ppp;
+            let pad = 8.0;
+            let box_w = 104.0;
+            let box_h = 28.0;
+            // Embedded engine is a native child window and may occlude egui layers.
+            // Draw FPS just outside the viewport bounds so it stays visible.
+            let mut pos = match model.preferences.fps_overlay_corner {
+                FpsOverlayCorner::TopLeft => egui::pos2(min_x + pad, min_y - box_h - pad),
+                FpsOverlayCorner::TopRight => egui::pos2(max_x - box_w - pad, min_y - box_h - pad),
+                FpsOverlayCorner::BottomLeft => egui::pos2(min_x + pad, max_y + pad),
+                FpsOverlayCorner::BottomRight => egui::pos2(max_x - box_w - pad, max_y + pad),
+            };
+            let screen = ctx.screen_rect();
+            pos.x = pos
+                .x
+                .clamp(screen.left() + 4.0, screen.right() - box_w - 4.0);
+            pos.y = pos
+                .y
+                .clamp(screen.top() + 4.0, screen.bottom() - box_h - 4.0);
+            egui::Area::new("fps_overlay".into())
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos)
+                .show(ctx, |ui| {
+                    let text = format!("FPS: {:.1}", model.render_fps);
+                    egui::Frame::none()
+                        .fill(Color32::from_rgba_unmultiplied(16, 16, 20, 180))
+                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .font(FontId::monospace(14.0))
+                                    .color(Color32::from_rgb(180, 255, 180)),
+                            );
+                        });
+                });
+        }
+    }
 }
 
 fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&mut EngineState>) {
@@ -306,6 +424,31 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
         ui.label("Level file");
         ui.text_edit_singleline(&mut model.level_path);
     });
+    ui.horizontal(|ui| {
+        ui.label("Project file");
+        ui.text_edit_singleline(&mut model.project_file_path);
+    });
+    let mut project_vsync_changed = false;
+    if let Some(project) = model.current_project.as_mut() {
+        ui.collapsing("Project settings", |ui| {
+            project_vsync_changed = ui
+                .checkbox(&mut project.vsync_enabled, "Enable VSync")
+                .changed();
+            ui.label(
+                egui::RichText::new("When disabled (default), rendering runs uncapped.")
+                    .small()
+                    .weak(),
+            );
+        });
+    }
+    if project_vsync_changed {
+        if let Err(e) = model.save_project_file() {
+            model.status.clone_from(&e);
+            model.push_log(e);
+        } else {
+            model.status.clear();
+        }
+    }
 
     if !model.status.is_empty() {
         ui.colored_label(Color32::from_rgb(220, 140, 80), &model.status);
@@ -346,12 +489,21 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
                 model.status.clear();
             }
         }
-        let play = if is_embedded {
-            "▶ Play"
-        } else {
-            "▶ Play (push to engine)"
-        };
-        if ui.button(play).clicked() {
+        if is_embedded {
+            let play = if model.play_mode_active {
+                "■ Stop"
+            } else {
+                "▶ Play"
+            };
+            if ui.button(play).clicked() {
+                if model.play_mode_active {
+                    model.stop_play_mode("Play mode stopped.");
+                } else {
+                    model.begin_play_mode();
+                    play_clicked = true;
+                }
+            }
+        } else if ui.button("▶ Play (push to engine)").clicked() {
             play_clicked = true;
         }
     });
@@ -404,27 +556,77 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
 }
 
 fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
-    ui.heading("Asset manager");
-    ui.label(egui::RichText::new(
-        "Import level JSON, MagicaVoxel .vox models, or Lua .lua scripts. Paths are stored in the level file (absolute after import). \
-         Assign a script to an object from the Scene panel (Lua chunk must return function(dt, api) … end).",
-    )
-    .weak());
+    ui.heading("Assets / Project files");
+    ui.label(
+        egui::RichText::new(
+            "Browse the current project folder tree. Open files in the in-editor code editor or external editor based on Preferences.",
+        )
+        .weak(),
+    );
     ui.separator();
 
-    if ui.button("Import files…").clicked() {
-        if let Some(paths) = rfd::FileDialog::new().pick_files() {
-            if let Err(e) = model.import_asset_paths(paths) {
+    let Some(project_root) = model.project_root_dir() else {
+        ui.label(egui::RichText::new("Open or create a project to browse files.").weak());
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        if ui.button("Import files…").clicked() {
+            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                if let Err(e) = model.import_asset_paths(paths) {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                } else {
+                    model.status.clear();
+                }
+            }
+        }
+        ui.separator();
+        ui.label(format!(
+            "Selected folder: {}",
+            model.selected_asset_rel_dir_normalized()
+        ));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("New file");
+        ui.add_sized(
+            [200.0, 24.0],
+            egui::TextEdit::singleline(&mut model.asset_browser_new_file_name)
+                .hint_text("example.lua"),
+        );
+        if ui.button("Create").clicked() {
+            if let Err(e) = model.create_new_file_in_selected_dir() {
                 model.status.clone_from(&e);
                 model.push_log(e);
             } else {
                 model.status.clear();
             }
         }
-    }
+    });
+    ui.horizontal(|ui| {
+        ui.label("New folder");
+        ui.add_sized(
+            [200.0, 24.0],
+            egui::TextEdit::singleline(&mut model.asset_browser_new_folder_name)
+                .hint_text("scripts"),
+        );
+        if ui.button("Create").clicked() {
+            if let Err(e) = model.create_new_folder_in_selected_dir() {
+                model.status.clone_from(&e);
+                model.push_log(e);
+            } else {
+                model.status.clear();
+            }
+        }
+    });
 
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| {
+        draw_project_tree(ui, model, &project_root, &project_root);
+
+        ui.separator();
+        ui.heading("Registered level assets");
         let snapshot: Vec<_> = model.level.assets.clone();
         for a in snapshot {
             ui.horizontal(|ui| {
@@ -436,8 +638,106 @@ fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
                 }
             });
         }
-        if model.level.assets.is_empty() {
-            ui.label(egui::RichText::new("No assets yet.").weak());
-        }
     });
+}
+
+fn draw_project_tree(ui: &mut egui::Ui, model: &mut EditorModel, root: &Path, dir: &Path) {
+    let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok().map(|x| x.path())).collect(),
+        Err(_) => return,
+    };
+    entries.sort();
+
+    for path in entries {
+        let rel = match path.strip_prefix(root) {
+            Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<invalid>");
+        if path.is_dir() {
+            let selected = model.selected_asset_rel_dir_normalized() == rel;
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(selected, format!("📁 {name}"))
+                    .clicked()
+                {
+                    model.asset_browser_selected_rel_dir = rel.clone();
+                }
+            });
+            ui.indent(format!("dir_{rel}"), |ui| {
+                draw_project_tree(ui, model, root, &path);
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("📄");
+                if ui.button(name).clicked() {
+                    if let Err(e) = model.open_asset_file(&path) {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    } else {
+                        model.status.clear();
+                    }
+                }
+                ui.label(egui::RichText::new(&rel).small().weak());
+            });
+        }
+    }
+}
+
+fn draw_code_editor_window(ctx: &egui::Context, model: &mut EditorModel) {
+    if !model.code_editor_open {
+        return;
+    }
+    let mut open = model.code_editor_open;
+    egui::Window::new("Code editor")
+        .open(&mut open)
+        .resizable(true)
+        .default_size([900.0, 620.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("File:");
+                ui.monospace(&model.code_editor_path);
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    if let Err(e) = model.save_open_code_editor_file() {
+                        model.code_editor_status = e;
+                    }
+                }
+                if ui.button("Reload").clicked() {
+                    match std::fs::read_to_string(&model.code_editor_path) {
+                        Ok(s) => {
+                            model.code_editor_text = s;
+                            model.code_editor_dirty = false;
+                            model.code_editor_status = "Reloaded.".to_string();
+                        }
+                        Err(e) => {
+                            model.code_editor_status =
+                                format!("reload {}: {e}", model.code_editor_path);
+                        }
+                    }
+                }
+            });
+            let resp = ui.add_sized(
+                [ui.available_width(), ui.available_height() - 40.0],
+                egui::TextEdit::multiline(&mut model.code_editor_text)
+                    .desired_rows(30)
+                    .lock_focus(true)
+                    .code_editor(),
+            );
+            if resp.changed() {
+                model.code_editor_dirty = true;
+            }
+            if !model.code_editor_status.is_empty() {
+                ui.label(
+                    egui::RichText::new(&model.code_editor_status)
+                        .small()
+                        .weak(),
+                );
+            }
+        });
+    model.code_editor_open = open;
 }
