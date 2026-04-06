@@ -37,7 +37,6 @@ fn main() {
         renderer: None,
         state: EngineState::default(),
         last: Instant::now(),
-        spin: 0.0f32,
         ipc_rx,
     };
 
@@ -51,7 +50,6 @@ struct RunnerApp {
     renderer: Option<VulkanRenderer>,
     state: EngineState,
     last: Instant,
-    spin: f32,
     ipc_rx: std::sync::mpsc::Receiver<ipc::EngineIpcOp>,
 }
 
@@ -90,8 +88,6 @@ impl ApplicationHandler for RunnerApp {
                 let now = Instant::now();
                 let dt = now.duration_since(self.last).as_secs_f32();
                 self.last = now;
-                self.spin += dt * 0.7;
-
                 while let Ok(op) = self.ipc_rx.try_recv() {
                     match op {
                         ipc::EngineIpcOp::LoadLevelFromPath(path) => {
@@ -116,9 +112,7 @@ impl ApplicationHandler for RunnerApp {
 
                 let sz = window.inner_size();
                 let aspect = sz.width.max(1) as f32 / sz.height.max(1) as f32;
-                let mut vp = self.state.view_projection(aspect);
-                // gentle orbit wobble
-                vp *= glam::Mat4::from_rotation_y(self.spin * 0.02);
+                let vp = self.state.view_projection(aspect);
 
                 let inst = self.state.voxel_instances_for_stream();
 

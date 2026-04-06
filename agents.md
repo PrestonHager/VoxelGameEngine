@@ -44,6 +44,7 @@ Documentation (human guides)
 -   README.md — build, editor quick start, prefab ID table, level JSON overview
 -   docs/source/editor.rst — editor panels, workflow, env vars, Push to engine
 -   docs/source/prefabs.rst — built-in prefab catalog and stable IDs
+-   docs/source/scripting.rst — Lua hooks, VGE_LUA_SCRIPT, ECS instance API
 
 Architecture
 

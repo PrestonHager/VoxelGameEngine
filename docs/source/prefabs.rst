@@ -53,6 +53,10 @@ Catalog
      - Terrain marker
      - Environment
      - Annotates terrain regions; full terrain painting is separate from this marker.
+   * - **9**
+     - Camera
+     - Utility
+     - Spawns an ECS ``CameraRig`` at the object position; the **first active** camera supplies the engine view matrix. Serialized via optional ``camera`` on ``PlacedObject`` (fov/yaw/pitch degrees, ``active``).
 
 Constants in code
 -----------------

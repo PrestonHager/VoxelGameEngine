@@ -6,5 +6,8 @@
 mod level;
 mod prefabs;
 
-pub use level::{Level, PlacedObject, TerrainLayer, TerrainMode, LEVEL_FORMAT_VERSION};
+pub use level::{
+    AssetKind, AssetRecord, CameraAuthoring, Level, PlacedObject, TerrainLayer, TerrainMode,
+    LEVEL_FORMAT_VERSION,
+};
 pub use prefabs::{ids, PrefabCategory, PrefabInfo, PrefabLibrary};

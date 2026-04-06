@@ -1,14 +1,15 @@
 //! Application loop: fixed-step ECS tick, camera, optional voxel mesh sampling for instances.
 
-use ecs::{Position, PrefabRef, Velocity, World};
+use ecs::{CameraRig, Position, PrefabRef, Velocity, World};
 use glam::{IVec3, Mat4, Vec3};
 use meshing::dual_contouring::{extract_from_chunk_scalar, MeshBuffers};
 use physics::PhysicsWorld;
-use scene::{Level, PlacedObject, TerrainLayer, TerrainMode};
+use scene::{CameraAuthoring, Level, PlacedObject, TerrainLayer, TerrainMode};
+use scripting::ScriptHost;
+use std::collections::HashMap;
 use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
-/// Upper bound for instance data passed to the renderer; keep in sync with `render-vulkan` (`MAX_INSTANCES`).
 const MAX_INSTANCES: usize = 16_384;
 
 pub struct EngineState {
@@ -16,10 +17,14 @@ pub struct EngineState {
     pub voxel_world: ChunkWorld,
     pub physics: PhysicsWorld,
     pub mesh_scratch: MeshBuffers,
+    /// Free-flight fallback when no active `Camera` prefab exists.
     pub camera_pos: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub time: f32,
+    /// Maps level `instance_id` → ECS entity (for Lua hooks).
+    pub entity_by_instance: HashMap<u64, ecs::Entity>,
+    pub script: Option<ScriptHost>,
 }
 
 fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
@@ -34,7 +39,6 @@ fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
                     }
                 }
             }
-            // small hill (authoring-friendly default detail)
             for x in 4..12 {
                 for z in 4..12 {
                     let wy = top + 1;
@@ -49,21 +53,41 @@ fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
 }
 
 impl EngineState {
-    /// Replace ECS + terrain from a serialized level (editor push / load).
     pub fn from_level(level: &Level) -> Self {
         let mut world = World::default();
+        let mut entity_by_instance = HashMap::new();
+
         for o in &level.objects {
             if !o.visible {
                 continue;
             }
-            world.spawn_prefab(
-                Position(Vec3::from_array(o.position)),
-                PrefabRef(o.prefab_id),
-            );
+            let e = if o.prefab_id == scene::ids::CAMERA {
+                let rig = o
+                    .camera
+                    .as_ref()
+                    .map(|c| CameraRig {
+                        fov_deg: c.fov_deg,
+                        near: 0.1,
+                        far: 200.0,
+                        yaw: c.yaw_deg.to_radians(),
+                        pitch: c.pitch_deg.to_radians(),
+                        active: c.active,
+                    })
+                    .unwrap_or_default();
+                world.spawn_camera(Position(Vec3::from_array(o.position)), rig)
+            } else {
+                world.spawn_prefab(
+                    Position(Vec3::from_array(o.position)),
+                    PrefabRef(o.prefab_id),
+                )
+            };
+            entity_by_instance.insert(o.instance_id, e);
         }
 
         let mut vw = ChunkWorld::new(16);
         apply_terrain_layer(&mut vw, &level.terrain);
+
+        let script = ScriptHost::from_level(level);
 
         Self {
             world,
@@ -74,6 +98,8 @@ impl EngineState {
             yaw: -0.55,
             pitch: -0.35,
             time: 0.0,
+            entity_by_instance,
+            script,
         }
     }
 
@@ -89,14 +115,29 @@ impl Default for EngineState {
             ..Default::default()
         };
         level.objects.push(PlacedObject {
+            instance_id: 10,
+            prefab_id: scene::ids::CAMERA,
+            name: "Main camera".into(),
+            position: [12.0, 14.0, 18.0],
+            visible: true,
+            camera: Some(CameraAuthoring {
+                fov_deg: 45.0,
+                yaw_deg: -31.5,
+                pitch_deg: -20.0,
+                active: true,
+            }),
+            script_asset_id: None,
+        });
+        level.objects.push(PlacedObject {
             instance_id: 1,
             prefab_id: scene::ids::SPAWN_POINT,
             name: "Spawn".into(),
             position: [3.0, 1.0, 2.0],
             visible: true,
+            camera: None,
+            script_asset_id: None,
         });
         let mut s = Self::from_level(&level);
-        // One dynamic body for integration demo (not yet in level format).
         s.world.spawn_with(
             Position(Vec3::new(0.0, 0.0, 0.0)),
             Some(Velocity(Vec3::new(0.2, 0.1, 0.0))),
@@ -110,25 +151,58 @@ impl EngineState {
         self.world.system_integrate(FIXED_DT);
         self.physics.step();
         self.time += FIXED_DT;
+        if let Some(s) = &self.script {
+            let map = &self.entity_by_instance;
+            if let Err(e) = s.tick(&mut self.world, map, FIXED_DT) {
+                tracing::warn!(target = "script", "lua tick: {e}");
+            }
+        }
+    }
+
+    /// First active camera rig in the world, if any.
+    pub fn active_camera_view(&self, aspect: f32) -> Option<Mat4> {
+        for (_, p, c) in self.world.camera_views() {
+            if !c.active {
+                continue;
+            }
+            let proj = Mat4::perspective_rh(c.fov_deg.to_radians(), aspect, c.near, c.far);
+            let (sy, cy) = c.pitch.sin_cos();
+            let (sx, cx) = c.yaw.sin_cos();
+            let forward = Vec3::new(cx * cy, sy, sx * cy);
+            let target = p.0 + forward;
+            let view = Mat4::look_at_rh(p.0, target, Vec3::Y);
+            return Some(proj * view);
+        }
+        None
     }
 
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
-        let proj = Mat4::perspective_rh(45f32.to_radians(), aspect, 0.1, 200.0);
-        let (sy, cy) = self.pitch.sin_cos();
-        let (sx, cx) = self.yaw.sin_cos();
-        let forward = Vec3::new(cx * cy, sy, sx * cy);
-        let target = self.camera_pos + forward;
-        let view = Mat4::look_at_rh(self.camera_pos, target, Vec3::Y);
-        proj * view
+        self.active_camera_view(aspect).unwrap_or_else(|| {
+            let proj = Mat4::perspective_rh(45f32.to_radians(), aspect, 0.1, 200.0);
+            let (sy, cy) = self.pitch.sin_cos();
+            let (sx, cx) = self.yaw.sin_cos();
+            let forward = Vec3::new(cx * cy, sy, sx * cy);
+            let target = self.camera_pos + forward;
+            let view = Mat4::look_at_rh(self.camera_pos, target, Vec3::Y);
+            proj * view
+        })
     }
 
-    /// Rebuild scalar mesh for chunk under camera and return instance offsets (world space).
+    pub fn camera_sample_position(&self) -> Vec3 {
+        self.world
+            .camera_views()
+            .find(|(_, _, c)| c.active)
+            .map(|(_, p, _)| p.0)
+            .unwrap_or(self.camera_pos)
+    }
+
     pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 3]> {
+        let cam = self.camera_sample_position();
         let e = self.voxel_world.edge as i32;
         let cc = IVec3::new(
-            (self.camera_pos.x / e as f32).floor() as i32,
-            (self.camera_pos.y / e as f32).floor() as i32,
-            (self.camera_pos.z / e as f32).floor() as i32,
+            (cam.x / e as f32).floor() as i32,
+            (cam.y / e as f32).floor() as i32,
+            (cam.z / e as f32).floor() as i32,
         );
         let _near = voxel::ChunkWorld::stream_chunks(cc, 1);
 

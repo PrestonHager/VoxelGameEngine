@@ -73,6 +73,46 @@ fn cube_vertices() -> (Vec<Vertex>, Vec<u32>) {
     (verts, idx)
 }
 
+/// `SurfaceCapabilitiesKHR::current_extent` is `(0,0)` on some Win32 surfaces (e.g. child windows)
+/// until layout; treating that as valid makes `vkCreateSwapchainKHR` validation fail.
+///
+/// `inner_w` / `inner_h` are the surface size to target (from the window or an explicit override when
+/// `request_inner_size` has not been applied yet).
+///
+/// When `force_from_inner` is true (embedded resize with known egui pixels), ignore
+/// `caps.current_extent` so we do not keep a stale extent before the OS updates the HWND.
+fn pick_swapchain_extent(
+    caps: &vk::SurfaceCapabilitiesKHR,
+    inner_w: u32,
+    inner_h: u32,
+    force_from_inner: bool,
+) -> vk::Extent2D {
+    let clamp_wh = |w: u32, h: u32| vk::Extent2D {
+        width: w.clamp(caps.min_image_extent.width, caps.max_image_extent.width),
+        height: h.clamp(caps.min_image_extent.height, caps.max_image_extent.height),
+    };
+
+    let mut extent = if !force_from_inner
+        && caps.current_extent.width != u32::MAX
+        && caps.current_extent.height != u32::MAX
+    {
+        caps.current_extent
+    } else {
+        clamp_wh(inner_w, inner_h)
+    };
+
+    if extent.width == 0 || extent.height == 0 {
+        extent = clamp_wh(inner_w.max(1), inner_h.max(1));
+    }
+    if extent.width == 0 || extent.height == 0 {
+        extent = vk::Extent2D {
+            width: caps.min_image_extent.width.max(1),
+            height: caps.min_image_extent.height.max(1),
+        };
+    }
+    extent
+}
+
 pub struct VulkanRenderer {
     _entry: Entry,
     instance: Instance,
@@ -264,7 +304,7 @@ impl VulkanRenderer {
             _debug_messenger: debug_messenger,
         };
 
-        r.create_swapchain(window)?;
+        r.create_swapchain(window, None)?;
         r.create_render_pass()?;
         r.create_command_pool()?;
         r.create_depth_resources()?;
@@ -277,7 +317,13 @@ impl VulkanRenderer {
         Ok(r)
     }
 
-    fn create_swapchain(&mut self, window: &Window) -> Result<(), RenderError> {
+    /// `inner_size_override`: use when the OS has not yet updated [`Window::inner_size`] after
+    /// `request_inner_size` (common on Windows for child windows).
+    fn create_swapchain(
+        &mut self,
+        window: &Window,
+        inner_size_override: Option<(u32, u32)>,
+    ) -> Result<(), RenderError> {
         let caps = unsafe {
             self.surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, self.surface)?
@@ -306,19 +352,12 @@ impl VulkanRenderer {
             .find(|&m| m == vk::PresentModeKHR::MAILBOX)
             .unwrap_or(vk::PresentModeKHR::FIFO);
 
-        let extent = if caps.current_extent.width != u32::MAX {
-            caps.current_extent
-        } else {
-            let s = window.inner_size();
-            vk::Extent2D {
-                width: s
-                    .width
-                    .clamp(caps.min_image_extent.width, caps.max_image_extent.width),
-                height: s
-                    .height
-                    .clamp(caps.min_image_extent.height, caps.max_image_extent.height),
-            }
+        let sz = window.inner_size();
+        let (iw, ih, force_inner) = match inner_size_override {
+            Some((w, h)) if w > 0 && h > 0 => (w, h, true),
+            _ => (sz.width, sz.height, false),
         };
+        let extent = pick_swapchain_extent(&caps, iw, ih, force_inner);
 
         let mut image_count = caps.min_image_count.saturating_add(1);
         if caps.max_image_count > 0 {
@@ -938,9 +977,40 @@ impl VulkanRenderer {
     /// # Safety
     /// Same requirements as [`Self::new`] for `window`, and no concurrent use of this renderer on another thread.
     pub unsafe fn resize(&mut self, window: &Window) -> Result<(), RenderError> {
+        let s = window.inner_size();
+        if s.width == 0 || s.height == 0 {
+            return Ok(());
+        }
         self.device.device_wait_idle()?;
         self.destroy_swapchain_chain();
-        self.create_swapchain(window)?;
+        self.create_swapchain(window, None)?;
+        self.create_render_pass()?;
+        self.create_depth_resources()?;
+        self.load_mesh_and_pipeline()?;
+        self.create_framebuffers()?;
+        self.create_uniforms_and_descriptors()?;
+        self.create_sync()?;
+        self.allocate_command_buffers()?;
+        Ok(())
+    }
+
+    /// Like [`Self::resize`], but uses `width` / `height` for the swapchain extent instead of
+    /// [`Window::inner_size`], which may lag behind [`Window::request_inner_size`] on some platforms.
+    ///
+    /// # Safety
+    /// Same as [`Self::resize`].
+    pub unsafe fn resize_to(
+        &mut self,
+        window: &Window,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        self.device.device_wait_idle()?;
+        self.destroy_swapchain_chain();
+        self.create_swapchain(window, Some((width, height)))?;
         self.create_render_pass()?;
         self.create_depth_resources()?;
         self.load_mesh_and_pipeline()?;
