@@ -6,7 +6,7 @@ use crate::model::{
 };
 use eframe::egui;
 use eframe::egui::{
-    menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke,
+    menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, PointerButton, Sense, Stroke,
 };
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
@@ -840,10 +840,17 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
         )
         .weak(),
     );
+    ui.label(
+        egui::RichText::new(
+            "Preview controls: wheel = zoom, drag = rotate model.",
+        )
+        .small()
+        .weak(),
+    );
     ui.separator();
     ui.horizontal(|ui| {
         ui.label("Model edge");
-        ui.add(egui::DragValue::new(&mut model.voxel_model_editor.edge).range(1..=64));
+        ui.add(egui::DragValue::new(&mut model.voxel_model_editor.edge).range(1..=255));
         ui.label("Sphere radius");
         ui.add(egui::DragValue::new(&mut model.voxel_model_editor.sphere_radius).range(1..=32));
         ui.label("Color index");
@@ -860,6 +867,53 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
             model.clear_model_voxels();
         }
     });
+    ui.horizontal(|ui| {
+        ui.label("Tool");
+        ui.selectable_value(
+            &mut model.voxel_model_editor.active_tool,
+            VoxelPaintTool::Paint,
+            "Brush",
+        );
+        ui.selectable_value(
+            &mut model.voxel_model_editor.active_tool,
+            VoxelPaintTool::Erase,
+            "Eraser",
+        );
+        ui.separator();
+        ui.label("Edit plane");
+        ui.selectable_value(
+            &mut model.voxel_model_editor.active_plane,
+            VoxelEditPlane::XY,
+            "XY",
+        );
+        ui.selectable_value(
+            &mut model.voxel_model_editor.active_plane,
+            VoxelEditPlane::XZ,
+            "XZ",
+        );
+        ui.selectable_value(
+            &mut model.voxel_model_editor.active_plane,
+            VoxelEditPlane::YZ,
+            "YZ",
+        );
+    });
+    let edge = model.voxel_model_editor.edge.max(1);
+    let max_layer = edge.saturating_sub(1);
+    model.voxel_model_editor.active_layer = model.voxel_model_editor.active_layer.min(max_layer);
+    ui.horizontal(|ui| {
+        ui.label("Layer");
+        ui.add(egui::Slider::new(
+            &mut model.voxel_model_editor.active_layer,
+            0..=max_layer,
+        ));
+    });
+
+    ui.separator();
+    ui.columns(2, |cols| {
+        draw_model_preview(&mut cols[0], model);
+        draw_slice_paint_panel(&mut cols[1], model);
+    });
+
     ui.horizontal(|ui| {
         ui.label("Export name");
         ui.text_edit_singleline(&mut model.voxel_model_editor.export_name);
@@ -891,4 +945,139 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
         "Current voxel count: {}",
         model.voxel_model_editor.voxels.len()
     ));
+}
+
+fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
+    ui.label("3D Preview");
+    let size = egui::vec2(ui.available_width().max(200.0), 340.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::drag());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, Color32::from_gray(20));
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_gray(70)));
+
+    if resp.dragged_by(PointerButton::Primary) || resp.dragged_by(PointerButton::Middle) {
+        let d = resp.drag_delta();
+        model.voxel_model_editor.orbit_yaw -= d.x * 0.01;
+        model.voxel_model_editor.orbit_pitch =
+            (model.voxel_model_editor.orbit_pitch + d.y * 0.01).clamp(-1.5, 1.5);
+        ui.ctx().request_repaint();
+    }
+    if resp.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > f32::EPSILON {
+            model.voxel_model_editor.camera_distance =
+                (model.voxel_model_editor.camera_distance - scroll * 0.03).clamp(4.0, 120.0);
+            ui.ctx().request_repaint();
+        }
+    }
+
+    let voxels = model.voxel_model_editor.voxels.clone();
+    let edge = model.voxel_model_editor.edge.max(1) as f32;
+    let c = (edge - 1.0) * 0.5;
+    let sy = model.voxel_model_editor.orbit_yaw.sin();
+    let cy = model.voxel_model_editor.orbit_yaw.cos();
+    let sx = model.voxel_model_editor.orbit_pitch.sin();
+    let cx = model.voxel_model_editor.orbit_pitch.cos();
+    let scale = rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
+    let center = rect.center();
+
+    let mut projected: Vec<(f32, egui::Pos2, u8)> = voxels
+        .iter()
+        .map(|v| {
+            let mut x = v.x as f32 - c;
+            let mut y = v.y as f32 - c;
+            let mut z = v.z as f32 - c;
+            let rx = cy * x + sy * z;
+            let rz = -sy * x + cy * z;
+            x = rx;
+            z = rz;
+            let ry = cx * y - sx * z;
+            let rz2 = sx * y + cx * z;
+            y = ry;
+            z = rz2;
+            let p = egui::pos2(center.x + x * scale, center.y - y * scale);
+            (z, p, v.color_index)
+        })
+        .collect();
+    projected.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_z, p, color_idx) in projected {
+        let shade = color_idx.max(32);
+        let color = Color32::from_rgb(shade, shade.saturating_sub(20), shade.saturating_add(10));
+        painter.circle_filled(p, (scale * 0.42).max(1.5), color);
+    }
+}
+
+fn draw_slice_paint_panel(ui: &mut egui::Ui, model: &mut EditorModel) {
+    ui.label("Paint / Erase");
+    let edge = model.voxel_model_editor.edge.max(1);
+    let cell = (ui.available_width().min(340.0) / edge as f32).clamp(8.0, 28.0);
+    let size = egui::vec2(cell * edge as f32, cell * edge as f32);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, Color32::from_gray(14));
+
+    for i in 0..=edge {
+        let x = rect.left() + i as f32 * cell;
+        let y = rect.top() + i as f32 * cell;
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            Stroke::new(1.0, Color32::from_gray(40)),
+        );
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            Stroke::new(1.0, Color32::from_gray(40)),
+        );
+    }
+
+    for v in &model.voxel_model_editor.voxels {
+        if v.x >= edge || v.y >= edge || v.z >= edge {
+            continue;
+        }
+        let is_on_layer = match model.voxel_model_editor.active_plane {
+            VoxelEditPlane::XY => v.z == model.voxel_model_editor.active_layer,
+            VoxelEditPlane::XZ => v.y == model.voxel_model_editor.active_layer,
+            VoxelEditPlane::YZ => v.x == model.voxel_model_editor.active_layer,
+        };
+        if !is_on_layer {
+            continue;
+        }
+        let (a, b) = match model.voxel_model_editor.active_plane {
+            VoxelEditPlane::XY => (v.x, v.y),
+            VoxelEditPlane::XZ => (v.x, v.z),
+            VoxelEditPlane::YZ => (v.y, v.z),
+        };
+        let min = egui::pos2(
+            rect.left() + a as f32 * cell + 1.0,
+            rect.top() + (edge.saturating_sub(1).saturating_sub(b)) as f32 * cell + 1.0,
+        );
+        let max = min + egui::vec2(cell - 2.0, cell - 2.0);
+        let c = v.color_index.max(24);
+        painter.rect_filled(
+            egui::Rect::from_min_max(min, max),
+            1.5,
+            Color32::from_rgb(c, c.saturating_sub(16), c.saturating_add(8)),
+        );
+    }
+
+    if (resp.dragged() || resp.clicked()) && resp.contains_pointer() {
+        if let Some(pointer) = resp.interact_pointer_pos() {
+            let gx = ((pointer.x - rect.left()) / cell).floor() as i32;
+            let gy = ((pointer.y - rect.top()) / cell).floor() as i32;
+            if gx >= 0 && gy >= 0 && gx < edge as i32 && gy < edge as i32 {
+                let a = gx as u8;
+                let b = (edge as i32 - 1 - gy) as u8;
+                let layer = model.voxel_model_editor.active_layer;
+                let (x, y, z) = match model.voxel_model_editor.active_plane {
+                    VoxelEditPlane::XY => (a, b, layer),
+                    VoxelEditPlane::XZ => (a, layer, b),
+                    VoxelEditPlane::YZ => (layer, a, b),
+                };
+                match model.voxel_model_editor.active_tool {
+                    VoxelPaintTool::Paint => model.paint_model_voxel(x, y, z),
+                    VoxelPaintTool::Erase => model.erase_model_voxel(x, y, z),
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+    }
 }

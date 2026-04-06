@@ -19,6 +19,7 @@ use egui_winit::winit;
 use engine_core::EngineState;
 use render_vulkan::{RenderError, VulkanRenderer};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -293,6 +294,8 @@ struct Inner {
     preview_orbiting: bool,
     preview_panning: bool,
     preview_last_cursor: Option<(f64, f64)>,
+    preview_last_applied_level: Option<scene::Level>,
+    preview_last_applied_root: Option<PathBuf>,
 }
 
 fn set_engine_input_capture(inner: &mut Inner, capture: bool) {
@@ -611,6 +614,8 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             preview_orbiting: false,
             preview_panning: false,
             preview_last_cursor: None,
+            preview_last_applied_level: None,
+            preview_last_applied_root: None,
         });
 
         if let Some(i) = &self.inner {
@@ -659,20 +664,26 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 });
 
                 if inner.model.preview_mode_active && !inner.model.play_mode_active {
-                    // Keep editor edits visible in embedded viewport without requiring Play.
+                    // Keep editor edits visible without rebuilding runtime state every frame.
                     let level = inner.model.level.clone();
                     let asset_root = inner.model.project_root_dir();
-                    let saved_cam = (
-                        inner.engine_state.camera_pos,
-                        inner.engine_state.yaw,
-                        inner.engine_state.pitch,
-                    );
-                    inner
-                        .engine_state
-                        .apply_level_with_asset_root(&level, asset_root.as_deref());
-                    inner.engine_state.camera_pos = saved_cam.0;
-                    inner.engine_state.yaw = saved_cam.1;
-                    inner.engine_state.pitch = saved_cam.2;
+                    let changed = inner.preview_last_applied_level.as_ref() != Some(&level)
+                        || inner.preview_last_applied_root.as_ref() != asset_root.as_ref();
+                    if changed {
+                        let saved_cam = (
+                            inner.engine_state.camera_pos,
+                            inner.engine_state.yaw,
+                            inner.engine_state.pitch,
+                        );
+                        inner
+                            .engine_state
+                            .apply_level_with_asset_root(&level, asset_root.as_deref());
+                        inner.engine_state.camera_pos = saved_cam.0;
+                        inner.engine_state.yaw = saved_cam.1;
+                        inner.engine_state.pitch = saved_cam.2;
+                        inner.preview_last_applied_level = Some(level);
+                        inner.preview_last_applied_root = asset_root;
+                    }
                 }
 
                 // Apply play-mode input capture transitions requested by UI state.

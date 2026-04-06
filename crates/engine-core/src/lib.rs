@@ -13,6 +13,7 @@ use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
 const MAX_INSTANCES: usize = 524_288;
+const MAX_MODEL_VOXELS_PER_OBJECT: usize = 250_000;
 
 fn show_debug_terrain_points() -> bool {
     std::env::var_os("VGE_SHOW_DEBUG_TERRAIN_POINTS").is_some()
@@ -47,7 +48,16 @@ fn spawn_model_voxels(
         obj.rotation[1],
         obj.rotation[2],
     );
-    for v in &model.voxels {
+    for (i, v) in model.voxels.iter().enumerate() {
+        if i >= MAX_MODEL_VOXELS_PER_OBJECT {
+            tracing::warn!(
+                target: "engine_core",
+                "model voxel cap reached ({}), truncating '{}'",
+                MAX_MODEL_VOXELS_PER_OBJECT,
+                path.display()
+            );
+            break;
+        }
         let local = Vec3::new(v.x as f32 * sx, v.y as f32 * sy, v.z as f32 * sz);
         let world_pos = rot.mul_vec3(local) + Vec3::from_array(obj.position);
         let p = world_pos;
@@ -78,7 +88,12 @@ pub struct EngineState {
     pub last_cursor_pos: Option<(f64, f64)>,
     pub mouse_pos: Option<(f32, f32)>,
     pub mouse_delta: (f32, f32),
-    pub keys_down: std::collections::HashSet<String>,
+    pub key_w_down: bool,
+    pub key_a_down: bool,
+    pub key_s_down: bool,
+    pub key_d_down: bool,
+    pub key_space_down: bool,
+    pub key_shift_down: bool,
     pub pending_cursor_commands: CursorCommands,
 }
 
@@ -189,7 +204,12 @@ impl EngineState {
             last_cursor_pos: None,
             mouse_pos: None,
             mouse_delta: (0.0, 0.0),
-            keys_down: std::collections::HashSet::new(),
+            key_w_down: false,
+            key_a_down: false,
+            key_s_down: false,
+            key_d_down: false,
+            key_space_down: false,
+            key_shift_down: false,
             pending_cursor_commands: CursorCommands::default(),
         }
     }
@@ -264,7 +284,12 @@ impl EngineState {
                 mouse_dx,
                 mouse_dy,
                 mouse_pos,
-                &self.keys_down,
+                self.key_w_down,
+                self.key_a_down,
+                self.key_s_down,
+                self.key_d_down,
+                self.key_space_down,
+                self.key_shift_down,
             ) {
                 s.push_host_log(format!("[lua-error] {e}"));
                 tracing::warn!(target = "script", "lua tick: {e}");
@@ -292,11 +317,18 @@ impl EngineState {
     }
 
     pub fn set_key_down(&mut self, key: &str, down: bool) {
-        let key = key.to_ascii_lowercase();
-        if down {
-            self.keys_down.insert(key);
-        } else {
-            self.keys_down.remove(&key);
+        if key.eq_ignore_ascii_case("w") {
+            self.key_w_down = down;
+        } else if key.eq_ignore_ascii_case("a") {
+            self.key_a_down = down;
+        } else if key.eq_ignore_ascii_case("s") {
+            self.key_s_down = down;
+        } else if key.eq_ignore_ascii_case("d") {
+            self.key_d_down = down;
+        } else if key.eq_ignore_ascii_case("space") {
+            self.key_space_down = down;
+        } else if key.eq_ignore_ascii_case("shift") {
+            self.key_shift_down = down;
         }
     }
 

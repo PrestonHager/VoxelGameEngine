@@ -6,7 +6,7 @@ use ecs::{Entity, Position, Rotation, Scale, Velocity, World};
 use glam::Vec3;
 use mlua::{Function, Lua, Table, Value};
 use scene::Level;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -127,7 +127,12 @@ impl ScriptHost {
         mouse_dx: f32,
         mouse_dy: f32,
         mouse_pos: Option<(f32, f32)>,
-        keys_down: &HashSet<String>,
+        key_w: bool,
+        key_a: bool,
+        key_s: bool,
+        key_d: bool,
+        key_space: bool,
+        key_shift: bool,
     ) -> Result<(), ScriptError> {
         let globals = self.lua.globals();
         let w_raw = world as *mut World as usize;
@@ -148,12 +153,12 @@ impl ScriptHost {
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
-                    key_w: keys_down.contains("w"),
-                    key_a: keys_down.contains("a"),
-                    key_s: keys_down.contains("s"),
-                    key_d: keys_down.contains("d"),
-                    key_space: keys_down.contains("space"),
-                    key_shift: keys_down.contains("shift"),
+                    key_w,
+                    key_a,
+                    key_s,
+                    key_d,
+                    key_space,
+                    key_shift,
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -178,12 +183,12 @@ impl ScriptHost {
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
-                    key_w: keys_down.contains("w"),
-                    key_a: keys_down.contains("a"),
-                    key_s: keys_down.contains("s"),
-                    key_d: keys_down.contains("d"),
-                    key_space: keys_down.contains("space"),
-                    key_shift: keys_down.contains("shift"),
+                    key_w,
+                    key_a,
+                    key_s,
+                    key_d,
+                    key_space,
+                    key_shift,
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -502,8 +507,20 @@ fn tick_runs_in_memory_entity_script() {
     };
     let mut world = World::default();
     let map = HashMap::new();
-    let keys = HashSet::new();
-    host.tick(&mut world, &map, 1.0 / 60.0, 0.0, 0.0, None, &keys)
+    host.tick(
+        &mut world,
+        &map,
+        1.0 / 60.0,
+        0.0,
+        0.0,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
         .expect("tick without error");
 }
 

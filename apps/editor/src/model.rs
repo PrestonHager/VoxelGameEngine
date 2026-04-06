@@ -38,8 +38,6 @@ pub struct VoxelModelEditorState {
     pub orbit_yaw: f32,
     pub orbit_pitch: f32,
     pub camera_distance: f32,
-    pub pan_x: f32,
-    pub pan_y: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,8 +67,6 @@ impl Default for VoxelModelEditorState {
             orbit_yaw: -0.6,
             orbit_pitch: -0.4,
             camera_distance: 28.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
         }
     }
 }
@@ -863,7 +859,7 @@ impl EditorModel {
             .x
             .max(model.size.y)
             .max(model.size.z)
-            .clamp(1, 64) as u8;
+            .clamp(1, 255) as u8;
         self.voxel_model_editor.edge = edge;
         self.voxel_model_editor.active_layer = 0;
         self.voxel_model_editor.voxels.clear();

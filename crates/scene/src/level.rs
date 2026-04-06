@@ -28,7 +28,7 @@ fn default_rotation() -> [f32; 3] {
 }
 
 /// Optional camera rig when `prefab_id` is `ids::CAMERA`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CameraAuthoring {
     #[serde(default = "default_cam_fov")]
     pub fov_deg: f32,
@@ -60,7 +60,7 @@ pub enum TerrainMode {
 }
 
 /// Authoring-time terrain description; engine maps this to voxel chunks.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerrainLayer {
     #[serde(default)]
     pub mode: TerrainMode,
@@ -81,7 +81,7 @@ impl Default for TerrainLayer {
 }
 
 /// Imported file referenced by the level (paths are usually absolute after import from the editor).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssetRecord {
     pub id: String,
     /// Display name in the asset browser.
@@ -101,7 +101,7 @@ pub enum AssetKind {
 }
 
 /// One placed object in a level (editor instance id is stable in the UI until removed).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlacedObject {
     pub instance_id: u64,
     pub prefab_id: u32,
@@ -125,7 +125,7 @@ pub struct PlacedObject {
 }
 
 /// Serializable level: objects + terrain; used for save/load and IPC file path loads.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Level {
     #[serde(default = "default_format_version")]
     pub format_version: u32,
