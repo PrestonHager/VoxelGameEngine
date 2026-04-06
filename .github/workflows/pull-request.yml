@@ -5,6 +5,9 @@ name: Pull request
 
 on:
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - ".github/workflows/docs-pages.yml"
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
