@@ -30,6 +30,7 @@ pub mod ids {
     pub const TREE: u32 = 6;
     pub const ROCK: u32 = 7;
     pub const TERRAIN_CHUNK: u32 = 8;
+    pub const CAMERA: u32 = 9;
 }
 
 static BUILTIN: OnceLock<Vec<PrefabInfo>> = OnceLock::new();
@@ -76,6 +77,11 @@ fn builtin_vec() -> &'static Vec<PrefabInfo> {
                 id: ids::TERRAIN_CHUNK,
                 name: "Terrain marker".into(),
                 category: PrefabCategory::Environment,
+            },
+            PrefabInfo {
+                id: ids::CAMERA,
+                name: "Camera".into(),
+                category: PrefabCategory::Utility,
             },
         ]
     })

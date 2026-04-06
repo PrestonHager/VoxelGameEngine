@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 pub const LEVEL_FORMAT_VERSION: u32 = 1;
 
@@ -12,6 +13,34 @@ fn default_true() -> bool {
 
 fn default_base_height() -> i32 {
     0
+}
+
+fn default_cam_fov() -> f32 {
+    45.0
+}
+
+/// Optional camera rig when `prefab_id` is `ids::CAMERA`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CameraAuthoring {
+    #[serde(default = "default_cam_fov")]
+    pub fov_deg: f32,
+    #[serde(default)]
+    pub yaw_deg: f32,
+    #[serde(default)]
+    pub pitch_deg: f32,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+impl Default for CameraAuthoring {
+    fn default() -> Self {
+        Self {
+            fov_deg: default_cam_fov(),
+            yaw_deg: 0.0,
+            pitch_deg: -20.0,
+            active: true,
+        }
+    }
 }
 
 /// How terrain is generated when a level is applied (MVP: flat slab).
@@ -43,6 +72,26 @@ impl Default for TerrainLayer {
     }
 }
 
+/// Imported file referenced by the level (paths are usually absolute after import from the editor).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetRecord {
+    pub id: String,
+    /// Display name in the asset browser.
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: AssetKind,
+    /// Absolute or project-relative path on disk.
+    pub path: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetKind {
+    Level,
+    Vox,
+    Script,
+}
+
 /// One placed object in a level (editor instance id is stable in the UI until removed).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlacedObject {
@@ -52,6 +101,11 @@ pub struct PlacedObject {
     pub position: [f32; 3],
     #[serde(default = "default_true")]
     pub visible: bool,
+    #[serde(default)]
+    pub camera: Option<CameraAuthoring>,
+    /// References `AssetRecord.id` where `kind == script` (optional per-object Lua).
+    #[serde(default)]
+    pub script_asset_id: Option<String>,
 }
 
 /// Serializable level: objects + terrain; used for save/load and IPC file path loads.
@@ -64,6 +118,8 @@ pub struct Level {
     pub objects: Vec<PlacedObject>,
     #[serde(default)]
     pub terrain: TerrainLayer,
+    #[serde(default)]
+    pub assets: Vec<AssetRecord>,
 }
 
 impl Default for Level {
@@ -73,6 +129,7 @@ impl Default for Level {
             name: "Untitled".into(),
             objects: Vec::new(),
             terrain: TerrainLayer::default(),
+            assets: Vec::new(),
         }
     }
 }
@@ -84,6 +141,29 @@ impl Level {
 
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
+    }
+
+    /// Resolve a stored asset path for loading (engine / tooling).
+    pub fn resolve_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+        let rec = self.assets.iter().find(|a| a.id == asset_id)?;
+        let p = Path::new(&rec.path);
+        if p.is_absolute() {
+            Some(p.to_path_buf())
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(p))
+                .and_then(|p| p.canonicalize().ok())
+        }
+    }
+
+    /// Script assets only (for per-object Lua).
+    pub fn resolve_script_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+        let rec = self.assets.iter().find(|a| a.id == asset_id)?;
+        if rec.kind != AssetKind::Script {
+            return None;
+        }
+        self.resolve_asset_path(asset_id)
     }
 }
 
@@ -103,6 +183,8 @@ mod tests {
             name: "Cube A".into(),
             position: [1.0, 2.0, 3.0],
             visible: true,
+            camera: None,
+            script_asset_id: None,
         });
         let s = level.to_json_pretty().unwrap();
         let back = Level::from_json_str(&s).unwrap();

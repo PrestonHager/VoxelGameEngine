@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ecs = { path = "../ecs" }
+scene = { path = "../scene" }
+glam.workspace = true
 mlua.workspace = true
 notify.workspace = true
 tracing.workspace = true

@@ -12,5 +12,21 @@ path = "src/main.rs"
 protocol = { path = "../../shared/protocol" }
 scene = { path = "../../crates/scene" }
 logging = { path = "../../crates/logging" }
+engine-core = { path = "../../crates/engine-core" }
+render-vulkan = { path = "../../crates/render-vulkan" }
+platform = { path = "../../crates/platform" }
 tracing.workspace = true
 eframe = "0.30"
+egui-winit = "0.30"
+egui_glow = { version = "0.30", features = ["winit"] }
+glow = "0.16"
+glutin = "0.32"
+glutin-winit = "0.5"
+winit.workspace = true
+ash.workspace = true
+rfd = "0.15"
+uuid.workspace = true
+dot_vox = "5.2"
+dirs = "6"
+serde = { workspace = true }
+serde_json.workspace = true

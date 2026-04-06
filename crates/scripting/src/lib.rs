@@ -1,4 +1,10 @@
 //! Pluggable scripting: Lua (`mlua`) host; file watching for hot reload.
+//!
+//! See [`hooks::ScriptHost`] for ECS-bound instance hooks and the `vge`-style API table.
+
+mod hooks;
+
+pub use hooks::ScriptHost;
 
 use mlua::Lua;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
