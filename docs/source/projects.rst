@@ -1,16 +1,17 @@
 .. _projects-guide:
 
-Projects (planned)
-==================
+Projects
+========
 
-This page defines the planned **project container** model for VGE.
+The project workflow is implemented in the editor and scene crate.
+VGE projects use a binary ``.vge`` file plus a project folder containing levels, scripts, and other assets.
 
 Goals
 -----
 
-* Keep game content in a dedicated **project folder**.
-* Store project metadata and asset registry in a single binary **``.vge``** file.
-* Ensure asset locations are portable by storing **relative paths** (relative to the project folder).
+* Keep game content in a dedicated project folder.
+* Store project metadata and asset registry in a binary ``.vge`` file.
+* Keep paths portable with project-relative references.
 
 Project folder layout
 ---------------------
@@ -29,54 +30,56 @@ Suggested layout:
       ├─ textures/
       └─ meshes/
 
-The ``.vge`` file is the project root descriptor. All paths inside the file are interpreted
-relative to the folder that contains the ``.vge`` file.
+The ``.vge`` file is the project root descriptor. Paths stored in the file are interpreted
+relative to the directory containing that ``.vge`` file.
 
 Editor new-project scaffold
 ---------------------------
 
-Creating a new project now scaffolds:
+Creating a new project scaffolds:
 
-* ``<Name>/<Name>.vge`` for the binary project descriptor.
-* ``<Name>/levels/main.vge.json`` as the default empty level.
-* ``<Name>/assets/`` and ``<Name>/scripts/`` directories for content.
+* ``<Name>/<Name>.vge`` binary project descriptor.
+* ``<Name>/levels/main.vge.json`` default level.
+* ``<Name>/assets/`` and ``<Name>/scripts/`` content directories.
 
-``.vge`` file (binary) requirements
------------------------------------
+``.vge`` file format
+--------------------
 
-The ``.vge`` project file should be a binary configuration file containing at least:
+The scene crate stores project data in a versioned binary file with magic header ``VGEPRJ\\0\\n``.
+Current fields include:
 
-* ``format_version``: schema/version for migration.
-* ``name``: user-facing project name.
-* ``created_at`` / ``updated_at`` (optional but recommended).
-* ``default_level`` (optional): relative path to the startup level.
-* ``assets``: catalog of project assets.
+* ``format_version``: schema version.
+* ``name``: project display name.
+* ``default_level``: optional project-relative level path.
+* ``assets``: asset list including IDs, kind, and project-relative path.
+* ``vsync_enabled``: project-level embedded viewport VSync toggle.
 
 Asset entries
 -------------
 
-Each asset entry should include:
+Each asset entry includes:
 
-* ``asset_id``: stable unique identifier (UUID recommended).
-* ``kind``: asset type (for example: texture, mesh, script, level, material, shader, audio).
-* ``path``: **relative path** from the project folder (never absolute).
-* ``import_settings`` (optional): type-specific metadata.
+* ``id``: stable unique identifier.
+* ``name``: display name.
+* ``kind``: asset type (for example ``Script``, ``VoxModel``, ``DataJson``).
+* ``path``: relative path from project root.
 
 Path rules
 ----------
 
-* Paths in ``.vge`` must be relative and normalized (``/`` separators recommended in-file).
-* Reject paths that escape the project root (for example ``..`` traversal outside root).
-* Resolve final on-disk paths by joining project root + relative path.
+* Paths must be relative and normalized.
+* Absolute paths are rejected.
+* Traversal outside project root (``..``) is rejected.
+* Runtime path resolution joins project root + relative path.
 
 Backward compatibility
 ----------------------
 
-Current level-only workflows (``*.vge.json``) should keep working during migration.
-The editor can open standalone level files, then offer creating or attaching to a ``.vge`` project.
+Standalone level workflows (``*.vge.json``) still work. The editor can open and save levels even when no
+project file is loaded.
 
-Implementation checklist
-------------------------
+Editor workflow status
+----------------------
 
 * [x] Add a new ``Project`` data model module with binary serialize/deserialize support.
 * [x] Define ``.vge`` binary schema v1 (header/magic + versioned payload).
@@ -92,5 +95,13 @@ Implementation checklist
     * [x] path traversal rejection;
     * [x] relative-path resolution;
     * [ ] editor integration flow (open/save/push from project context).
-* [~] Update CLI and docs to support project-centric workflows end-to-end (initial docs added; CLI guidance pending).
+* [~] Update CLI and docs to support project-centric workflows end-to-end.
+
+Current behavior notes
+----------------------
+
+* New/Open/Save/Save As project actions are available from the editor.
+* Default level path is project-relative and can be loaded automatically from project metadata.
+* Asset imports write project-relative paths when a project is open.
+* In external mode, level push still uses level file paths over IPC; explicit project context IPC extension remains future work.
 

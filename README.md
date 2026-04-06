@@ -16,7 +16,7 @@ cargo run -p editor -- engine-runner
 
 ## Editor (MVP)
 
-The **editor** (`apps/editor`) is a **single executable**: it hosts the UI and, in **embedded** mode (default), an in-process Vulkan view. For a **separate** engine window, run **`--no-embedded`** or start the same binary with the **`engine-runner`** subcommand (see below). If nothing is listening on the IPC port in external mode, the editor spawns **`editor engine-runner`** next to itself. **Push to engine** reloads the level file over IPC to that host.
+The **editor** (`apps/editor`) is a **single executable**: it hosts the UI and, in **embedded** mode (default), an in-process Vulkan view. For a **separate** engine window, run **`--no-embedded`** or start the same binary with the **`engine-runner`** subcommand (see below). If nothing is listening on the IPC port in external mode, the editor spawns **`editor engine-runner`** next to itself. **Push to engine** always saves first, then reloads the level file (IPC in external mode, in-process apply in embedded mode).
 
 **Full walkthrough:** Sphinx [Editor (MVP)](docs/source/editor.rst) (build with `sphinx-build`, see [Docs](#docs) below).
 
@@ -56,6 +56,8 @@ cargo run -p editor
 
 **External engine window** (eframe + separate Vulkan host): `cargo run -p editor -- --no-embedded`
 
+Use `--embedded` / `-e` to force embedded mode. You can also set `VGE_EMBEDDED=1|0` to override the saved default preference.
+
 ### Environment variables
 
 | Variable | Purpose |
@@ -79,7 +81,22 @@ Levels are JSON (`*.vge.json` suggested). Schema is defined by the `scene` crate
 
 ## Lua scripting (ECS hooks)
 
-Lua can drive per-object logic using **level `instance_id`** keys. Set **`VGE_LUA_SCRIPT`** to a file path; see [`docs/source/scripting.rst`](docs/source/scripting.rst) and `scripts/default_game.lua`.
+Lua can drive per-object logic using **level `instance_id`** keys. Script hooks can come from:
+
+- global script file via `VGE_LUA_SCRIPT`
+- per-object script assets attached in the level/project
+
+See [`docs/source/scripting.rst`](docs/source/scripting.rst) and `scripts/default_game.lua`.
+
+## Projects workflow
+
+Projects are supported via binary `.vge` files plus project-relative content paths.
+
+- New project scaffolds `<Name>.vge`, `levels/main.vge.json`, `assets/`, and `scripts/`
+- Project files enforce relative in-root paths (no absolute or traversal paths)
+- Project metadata includes `default_level`, assets, and project-level `vsync_enabled`
+
+See [`docs/source/projects.rst`](docs/source/projects.rst) for details.
 
 ## Built-in prefabs
 
@@ -137,17 +154,19 @@ Use **Ping engine** in the editor, then author a level and **Push to engine**.
 
 ## Docs
 
-- **Sphinx** sources: [`docs/source`](docs/source). User guides: [Editor](docs/source/editor.rst), [Prefabs](docs/source/prefabs.rst). Build:
+- **Sphinx** sources: [`docs/source`](docs/source). User guides: [Editor](docs/source/editor.rst), [Projects](docs/source/projects.rst), [Prefabs](docs/source/prefabs.rst), [Scripting](docs/source/scripting.rst). Build:
 
   ```bash
   pip install -r docs/requirements.txt
   cd docs/source && sphinx-build -b html . ../_build
   ```
 
-  Includes [Scripting](docs/source/scripting.rst) (Lua + ECS hooks).
-
 - **ReadTheDocs:** add a config when the repo is public.
 
 ## CI
 
-GitHub Actions runs `fmt`, `clippy`, and `test` on Windows, Ubuntu, and macOS (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+GitHub Actions workflows:
+
+- [`.github/workflows/pull-request.yml`](.github/workflows/pull-request.yml): `fmt`, `clippy`, and `test` on pull requests
+- [`.github/workflows/main-build-release.yml`](.github/workflows/main-build-release.yml): main-branch multi-OS builds and release gating
+- [`.github/workflows/docs-pages.yml`](.github/workflows/docs-pages.yml): Sphinx build and GitHub Pages deployment

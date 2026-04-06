@@ -3,12 +3,18 @@
 Lua scripting (ECS hooks)
 =========================
 
-The ``scripting`` crate hosts **Lua 5.4** via ``mlua``. The engine calls into Lua on each **fixed physics tick** (60 Hz) when a script file is configured.
+The ``scripting`` crate hosts **Lua 5.4** via ``mlua``. Script hooks run on the engine fixed tick
+(``1/60`` seconds) and can be sourced from a global script file, per-object script assets, or both.
 
 Loading
 -------
 
-Set the environment variable **``VGE_LUA_SCRIPT``** to a ``.lua`` file path before starting **``editor engine-runner``** (external host) or the **embedded editor** (``VGE_EMBEDDED=1``). The file is executed once at startup; there is no hot reload in this MVP (the existing ``ScriptHotWatch`` helper remains available for future wiring).
+Scripting initializes when at least one of the following is present:
+
+* environment variable ``VGE_LUA_SCRIPT`` pointing to a global script file
+* one or more placed level objects with ``script_asset_id`` mapped to script assets
+
+The active scripts are loaded when a level is applied/loaded. There is no always-on hot reload loop in the editor runtime path.
 
 Global hooks
 ------------
@@ -23,10 +29,18 @@ Global hooks
 * Keys: **level instance ids** (the ``instance_id`` field saved in JSON for each ``PlacedObject``).
 * Values: functions ``function(dt, api) ... end``.
 
-The **``api``** table (per hook invocation) exposes:
+**``_entity_scripts``** (optional table)
+
+Per-object script assets can return a function and are exposed by instance id. This supports attaching
+scripts from project assets to individual objects without hard-coding IDs in one monolithic script.
+
+Lua API
+-------
+
+The ``api`` table (per hook invocation) exposes:
 
 .. list-table::
-   :widths: 28 72
+   :widths: 30 70
    :header-rows: 1
 
    * - Method
@@ -39,6 +53,22 @@ The **``api``** table (per hook invocation) exposes:
      - Returns ``true`` if a position was written for a live entity.
    * - ``api.set_velocity(instance_id, x, y, z)``
      - Returns ``true`` only for entities in the **velocity** archetype (movable bodies).
+   * - ``api.get_rotation(instance_id)``
+     - Returns ``{ pitch, yaw, roll }`` or ``nil``.
+   * - ``api.set_rotation(instance_id, pitch, yaw, roll)``
+     - Sets entity rotation and returns ``true`` on success.
+   * - ``api.mouse_delta()``
+     - Returns per-frame mouse movement as ``{ x, y }``.
+   * - ``api.mouse_position()``
+     - Returns current mouse position as ``{ x, y }``.
+   * - ``api.center_mouse()``
+     - Requests mouse re-center in the host window on this tick.
+   * - ``api.set_cursor_visible(visible)``
+     - Requests cursor visibility change.
+   * - ``api.get_camera_angles(instance_id)``
+     - Returns current camera angles as ``{ yaw, pitch }``.
+   * - ``api.set_camera_angles(instance_id, yaw, pitch)``
+     - Updates camera angles and returns ``true`` on success.
 
 **``api.default_instance``** duplicates the table key (the instance id passed as the hook’s table entry) for convenience.
 
@@ -46,6 +76,13 @@ Safety
 ------
 
 Hooks run **synchronously** during ``EngineState::tick``. The Rust side passes raw pointers to the live ``World`` only for the duration of Lua calls: **do not** call back into engine APIs from other threads, and avoid re-entrancy.
+
+Sandbox and restrictions
+------------------------
+
+The runtime disables dangerous globals and module loading helpers in script environments, including:
+``os``, ``io``, ``package``, ``debug``, ``dofile``, ``loadfile``, and ``require``.
+Plan scripts around engine-exposed APIs rather than filesystem/process access.
 
 Example
 -------
