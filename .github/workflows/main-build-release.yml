@@ -1,0 +1,139 @@
+# Push to main: release build on all OSes. Creates a GitHub Release when workspace version changes;
+# otherwise uploads artifacts only (download from the workflow run).
+
+name: Main build
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-build-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Version & release gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      should_release: ${{ steps.meta.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read workspace version and compare to latest release
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c "
+          import tomllib
+          with open('Cargo.toml', 'rb') as f:
+              t = tomllib.load(f)
+          print(t['workspace']['package']['version'])
+          ")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          set +e
+          LATEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ] || [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "No comparable release; will create release ${TAG}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Latest release tag: ${LATEST}; workspace: ${TAG}"
+          if [ "$LATEST" = "$TAG" ]; then
+            echo "Version unchanged; build artifacts only (no new release)."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version bump; will create release ${TAG}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_suffix: linux-x64
+          - os: windows-latest
+            artifact_suffix: windows-x64
+          - os: macos-latest
+            artifact_suffix: macos-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev
+
+      - name: Build release binaries
+        run: cargo build --release -p editor -p engine-runner
+
+      - name: Package artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/release/editor target/release/engine-runner dist/
+          (cd dist && zip -r "../voxel-build-${{ matrix.artifact_suffix }}.zip" .)
+
+      - name: Package artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/editor.exe, target/release/engine-runner.exe dist/
+          Compress-Archive -Path dist/* -DestinationPath "voxel-build-${{ matrix.artifact_suffix }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.artifact_suffix }}
+          path: voxel-build-${{ matrix.artifact_suffix }}.zip
+
+  release:
+    name: GitHub Release
+    needs: [version, build]
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: dist
+          merge-multiple: true
+
+      - name: Flatten zip files for release
+        run: |
+          mkdir -p upload
+          find dist -name '*.zip' -exec cp {} upload/ \;
+          ls -la upload
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
