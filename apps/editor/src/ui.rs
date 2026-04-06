@@ -1,9 +1,7 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{
-    EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool,
-};
+use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool};
 use eframe::egui;
 use eframe::egui::{
     menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, PointerButton, Sense, Stroke,
@@ -140,7 +138,11 @@ pub fn draw_editor_ui(
         ui.horizontal(|ui| {
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Level, "Level");
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Assets, "Assets");
-            ui.selectable_value(&mut model.main_tab, EditorMainTab::ModelEditor, "Model Editor");
+            ui.selectable_value(
+                &mut model.main_tab,
+                EditorMainTab::ModelEditor,
+                "Model Editor",
+            );
         });
     });
 
@@ -247,11 +249,23 @@ pub fn draw_editor_ui(
                     });
                     ui.horizontal(|ui| {
                         ui.label("sx");
-                        ui.add(egui::DragValue::new(&mut o.scale[0]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[0])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sy");
-                        ui.add(egui::DragValue::new(&mut o.scale[1]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[1])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sz");
-                        ui.add(egui::DragValue::new(&mut o.scale[2]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[2])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("rx");
@@ -841,11 +855,9 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
         .weak(),
     );
     ui.label(
-        egui::RichText::new(
-            "Preview controls: wheel = zoom, drag = rotate model.",
-        )
-        .small()
-        .weak(),
+        egui::RichText::new("Preview controls: wheel = zoom, drag = rotate model.")
+            .small()
+            .weak(),
     );
     ui.separator();
     ui.horizontal(|ui| {
@@ -978,7 +990,8 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
     let cy = model.voxel_model_editor.orbit_yaw.cos();
     let sx = model.voxel_model_editor.orbit_pitch.sin();
     let cx = model.voxel_model_editor.orbit_pitch.cos();
-    let scale = rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
+    let scale =
+        rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
     let center = rect.center();
 
     let mut projected: Vec<(f32, egui::Pos2, u8)> = voxels
