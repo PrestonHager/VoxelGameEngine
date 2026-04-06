@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
+use std::collections::HashSet;
 use std::path::Path;
 use tracing::debug;
 
@@ -842,7 +843,7 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
     );
     ui.label(
         egui::RichText::new(
-            "Preview controls: wheel = zoom, drag = rotate model.",
+            "Preview controls: wheel = zoom, drag = rotate model, right-drag = offset pivot center.",
         )
         .small()
         .weak(),
@@ -954,39 +955,111 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, Color32::from_gray(20));
     painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_gray(70)));
-
     if resp.dragged_by(PointerButton::Primary) || resp.dragged_by(PointerButton::Middle) {
-        let d = resp.drag_delta();
-        model.voxel_model_editor.orbit_yaw -= d.x * 0.01;
+        // CAD-style orbit: both primary and middle drag map to yaw/pitch.
+        // Use per-frame pointer delta for stable, predictable movement.
+        let d = ui.input(|i| i.pointer.delta());
+        let orbit_sens = 0.01_f32;
+        let sx = if model.preferences.invert_orbit_x { 1.0 } else { -1.0 };
+        let sy = if model.preferences.invert_orbit_y { -1.0 } else { 1.0 };
+        model.voxel_model_editor.orbit_yaw += sx * d.x * orbit_sens;
+        model.voxel_model_editor.orbit_pitch += sy * d.y * orbit_sens;
+        // Keep angles bounded but continuous to allow infinite orbiting.
+        let tau = std::f32::consts::TAU;
+        model.voxel_model_editor.orbit_yaw =
+            (model.voxel_model_editor.orbit_yaw + std::f32::consts::PI).rem_euclid(tau)
+                - std::f32::consts::PI;
         model.voxel_model_editor.orbit_pitch =
-            (model.voxel_model_editor.orbit_pitch + d.y * 0.01).clamp(-1.5, 1.5);
+            (model.voxel_model_editor.orbit_pitch + std::f32::consts::PI).rem_euclid(tau)
+                - std::f32::consts::PI;
         ui.ctx().request_repaint();
     }
-    if resp.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > f32::EPSILON {
-            model.voxel_model_editor.camera_distance =
-                (model.voxel_model_editor.camera_distance - scroll * 0.03).clamp(4.0, 120.0);
-            ui.ctx().request_repaint();
-        }
+    if resp.dragged_by(PointerButton::Secondary) {
+        let d = resp.drag_delta();
+        // Right-drag moves the pivot center in model-space so later rotations orbit around it.
+        let edge_now = model.voxel_model_editor.edge.max(1) as f32;
+        let scale_now =
+            rect.width().min(rect.height()) / (edge_now + model.voxel_model_editor.camera_distance * 0.2);
+        let model_units_per_px = (1.0 / scale_now.max(0.0001)).clamp(0.001, 10.0);
+        model.voxel_model_editor.pan_x += d.x * model_units_per_px;
+        model.voxel_model_editor.pan_y -= d.y * model_units_per_px;
+        ui.ctx().request_repaint();
     }
 
     let voxels = model.voxel_model_editor.voxels.clone();
+    let occupied: HashSet<(u8, u8, u8)> = voxels.iter().map(|v| (v.x, v.y, v.z)).collect();
     let edge = model.voxel_model_editor.edge.max(1) as f32;
-    let c = (edge - 1.0) * 0.5;
+    let pivot_center = if voxels.is_empty() {
+        let c = (edge - 1.0) * 0.5;
+        [c, c, c]
+    } else {
+        let mut sx = 0.0f32;
+        let mut sy = 0.0f32;
+        let mut sz = 0.0f32;
+        for v in &voxels {
+            sx += v.x as f32;
+            sy += v.y as f32;
+            sz += v.z as f32;
+        }
+        let n = voxels.len() as f32;
+        [sx / n, sy / n, sz / n]
+    };
+    if resp.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > f32::EPSILON {
+            let model_size = model.voxel_model_editor.edge.max(1) as f32;
+            let model_radius = model_size * 0.5;
+            let adaptive_speed =
+                (model_radius * 0.06 + model.voxel_model_editor.camera_distance * 0.12).max(0.2);
+            model.voxel_model_editor.camera_distance =
+                (model.voxel_model_editor.camera_distance - scroll * adaptive_speed * 0.03)
+                    .clamp(1.0, 1000.0);
+            ui.ctx().request_repaint();
+        }
+    }
     let sy = model.voxel_model_editor.orbit_yaw.sin();
     let cy = model.voxel_model_editor.orbit_yaw.cos();
     let sx = model.voxel_model_editor.orbit_pitch.sin();
     let cx = model.voxel_model_editor.orbit_pitch.cos();
     let scale = rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
     let center = rect.center();
+    // Fixed point light from upper-left/front relative to model space.
+    let normalize3 = |v: [f32; 3]| -> [f32; 3] {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len <= 0.0001 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [v[0] / len, v[1] / len, v[2] / len]
+        }
+    };
+    let dot3 = |a: [f32; 3], b: [f32; 3]| -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] };
+    // Fixed key light: upper-left and slightly behind the viewer/camera direction.
+    let light_dir = normalize3([-0.55_f32, 0.85_f32, -0.55_f32]);
 
-    let mut projected: Vec<(f32, egui::Pos2, u8)> = voxels
+    let mut projected: Vec<(f32, egui::Pos2, u8, f32, f32)> = voxels
         .iter()
         .map(|v| {
-            let mut x = v.x as f32 - c;
-            let mut y = v.y as f32 - c;
-            let mut z = v.z as f32 - c;
+            let sample = |x: i32, y: i32, z: i32| -> f32 {
+                if x < 0 || y < 0 || z < 0 || x > 255 || y > 255 || z > 255 {
+                    return 0.0;
+                }
+                if occupied.contains(&(x as u8, y as u8, z as u8)) {
+                    1.0
+                } else {
+                    0.0
+                }
+            };
+            let vx = v.x as i32;
+            let vy = v.y as i32;
+            let vz = v.z as i32;
+            let gx = sample(vx + 1, vy, vz) - sample(vx - 1, vy, vz);
+            let gy = sample(vx, vy + 1, vz) - sample(vx, vy - 1, vz);
+            let gz = sample(vx, vy, vz + 1) - sample(vx, vy, vz - 1);
+            let normal = normalize3([-gx, -gy, -gz]);
+
+            let mut x = v.x as f32 - (pivot_center[0] + model.voxel_model_editor.pan_x);
+            let mut y = v.y as f32 - (pivot_center[1] + model.voxel_model_editor.pan_y);
+            let mut z = v.z as f32 - pivot_center[2];
             let rx = cy * x + sy * z;
             let rz = -sy * x + cy * z;
             x = rx;
@@ -995,14 +1068,41 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
             let rz2 = sx * y + cx * z;
             y = ry;
             z = rz2;
+            // Rotate normal with the model so a fixed world light changes shading as model rotates.
+            let (mut nx, mut ny, mut nz) = (normal[0], normal[1], normal[2]);
+            let nrx = cy * nx + sy * nz;
+            let nrz = -sy * nx + cy * nz;
+            nx = nrx;
+            nz = nrz;
+            let nry = cx * ny - sx * nz;
+            let nrz2 = sx * ny + cx * nz;
+            ny = nry;
+            nz = nrz2;
+            let normal_world = normalize3([nx, ny, nz]);
+            let diffuse = dot3(normal_world, light_dir).max(0.0_f32);
+            // Brighter baseline with directional contrast preserved:
+            // - higher ambient keeps far/back-facing voxels readable
+            // - diffuse term still gives clear side-to-side shading
+            let lighting: f32 = (0.45_f32 + diffuse * 0.65_f32).clamp(0.30_f32, 1.0_f32);
             let p = egui::pos2(center.x + x * scale, center.y - y * scale);
-            (z, p, v.color_index)
+            (z, p, v.color_index, lighting, y)
         })
         .collect();
     projected.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_z, p, color_idx) in projected {
-        let shade = color_idx.max(32);
-        let color = Color32::from_rgb(shade, shade.saturating_sub(20), shade.saturating_add(10));
+    for (z, p, color_idx, lighting, y_world) in projected {
+        let shadow_strength: f32 = (0.22_f32 - (z * 0.004_f32)).clamp(0.06_f32, 0.22_f32);
+        let shadow_offset = egui::vec2(8.0_f32 + z * 0.03_f32, 8.0_f32 + z * 0.03_f32);
+        let shadow_p = p + shadow_offset + egui::vec2(0.0_f32, y_world.max(0.0_f32) * 0.2_f32);
+        painter.circle_filled(
+            shadow_p,
+            (scale * 0.42).max(1.5),
+            Color32::from_rgba_unmultiplied(0, 0, 0, (shadow_strength * 255.0) as u8),
+        );
+        let shade: u8 = color_idx.max(32_u8);
+        let r = ((shade as f32) * lighting).clamp(0.0, 255.0) as u8;
+        let g = ((shade.saturating_sub(20) as f32) * lighting).clamp(0.0, 255.0) as u8;
+        let b = ((shade.saturating_add(10) as f32) * lighting).clamp(0.0, 255.0) as u8;
+        let color = Color32::from_rgb(r, g, b);
         painter.circle_filled(p, (scale * 0.42).max(1.5), color);
     }
 }

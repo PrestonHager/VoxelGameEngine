@@ -208,6 +208,8 @@ mod tests {
                 use_internal_editor_by_default: false,
                 show_fps_overlay: true,
                 fps_overlay_corner: crate::model::FpsOverlayCorner::BottomRight,
+                invert_orbit_x: true,
+                invert_orbit_y: false,
             },
             main_tab: EditorMainTab::Level,
         };
@@ -227,6 +229,8 @@ mod tests {
             back.preferences.fps_overlay_corner,
             crate::model::FpsOverlayCorner::BottomRight
         );
+        assert!(back.preferences.invert_orbit_x);
+        assert!(!back.preferences.invert_orbit_y);
         assert_eq!(back.main_tab, s.main_tab);
     }
 

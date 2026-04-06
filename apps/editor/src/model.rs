@@ -37,7 +37,10 @@ pub struct VoxelModelEditorState {
     pub active_layer: u8,
     pub orbit_yaw: f32,
     pub orbit_pitch: f32,
+    pub orbit_roll: f32,
     pub camera_distance: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +69,10 @@ impl Default for VoxelModelEditorState {
             active_layer: 0,
             orbit_yaw: -0.6,
             orbit_pitch: -0.4,
+            orbit_roll: 0.0,
             camera_distance: 28.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 }
@@ -93,6 +99,10 @@ pub struct EditorPreferences {
     pub show_fps_overlay: bool,
     #[serde(default)]
     pub fps_overlay_corner: FpsOverlayCorner,
+    #[serde(default)]
+    pub invert_orbit_x: bool,
+    #[serde(default)]
+    pub invert_orbit_y: bool,
 }
 
 impl Default for EditorPreferences {
@@ -103,6 +113,8 @@ impl Default for EditorPreferences {
             use_internal_editor_by_default: true,
             show_fps_overlay: false,
             fps_overlay_corner: FpsOverlayCorner::TopLeft,
+            invert_orbit_x: false,
+            invert_orbit_y: false,
         }
     }
 }
@@ -862,6 +874,13 @@ impl EditorModel {
             .clamp(1, 255) as u8;
         self.voxel_model_editor.edge = edge;
         self.voxel_model_editor.active_layer = 0;
+        // Reset preview defaults on each new model load.
+        self.voxel_model_editor.orbit_yaw = -0.6;
+        self.voxel_model_editor.orbit_pitch = -0.4;
+        self.voxel_model_editor.orbit_roll = 0.0;
+        self.voxel_model_editor.camera_distance = 28.0;
+        self.voxel_model_editor.pan_x = 0.0;
+        self.voxel_model_editor.pan_y = 0.0;
         self.voxel_model_editor.voxels.clear();
         for v in &model.voxels {
             if v.x < edge && v.y < edge && v.z < edge {
