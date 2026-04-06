@@ -1,9 +1,7 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{
-    EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool,
-};
+use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool};
 use eframe::egui;
 use eframe::egui::{
     menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke,
@@ -140,7 +138,11 @@ pub fn draw_editor_ui(
         ui.horizontal(|ui| {
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Level, "Level");
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Assets, "Assets");
-            ui.selectable_value(&mut model.main_tab, EditorMainTab::ModelEditor, "Model Editor");
+            ui.selectable_value(
+                &mut model.main_tab,
+                EditorMainTab::ModelEditor,
+                "Model Editor",
+            );
         });
     });
 
@@ -247,11 +249,23 @@ pub fn draw_editor_ui(
                     });
                     ui.horizontal(|ui| {
                         ui.label("sx");
-                        ui.add(egui::DragValue::new(&mut o.scale[0]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[0])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sy");
-                        ui.add(egui::DragValue::new(&mut o.scale[1]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[1])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sz");
-                        ui.add(egui::DragValue::new(&mut o.scale[2]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[2])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("rx");

@@ -138,13 +138,14 @@ impl EngineState {
                 let _ = world.set_rotation(e, Rotation(Vec3::from_array(o.rotation)));
                 e
             } else if o.model_asset_id.is_some() {
-                let (count, first_entity) = match spawn_model_voxels(&mut world, level, o, asset_root) {
-                    Ok(x) => x,
-                    Err(err) => {
-                        tracing::warn!(target: "engine_core", "model spawn failed: {err}");
-                        (0, None)
-                    }
-                };
+                let (count, first_entity) =
+                    match spawn_model_voxels(&mut world, level, o, asset_root) {
+                        Ok(x) => x,
+                        Err(err) => {
+                            tracing::warn!(target: "engine_core", "model spawn failed: {err}");
+                            (0, None)
+                        }
+                    };
                 if count == 0 {
                     // Fallback for invalid/empty model assets so object still exists.
                     let e = world.spawn_prefab(
@@ -396,11 +397,7 @@ impl EngineState {
             .positions_non_camera()
             .map(|(e, p)| {
                 let r = self.world.rotation_of(e).map(|r| r.0).unwrap_or(Vec3::ZERO);
-                let s = self
-                    .world
-                    .scale_of(e)
-                    .map(|s| s.0)
-                    .unwrap_or(Vec3::ONE);
+                let s = self.world.scale_of(e).map(|s| s.0).unwrap_or(Vec3::ONE);
                 [p.0.x, p.0.y, p.0.z, r.x, r.y, r.z, s.x, s.y, s.z]
             })
             .collect();

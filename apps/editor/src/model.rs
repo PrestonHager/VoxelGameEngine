@@ -751,7 +751,8 @@ impl EditorModel {
     fn export_model_vox_to_path(&mut self, path: &Path) -> Result<String, String> {
         let bytes = build_magica_vox_bytes(&self.voxel_model_editor.voxels)?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
         std::fs::write(path, &bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
         let _ = dot_vox::load_bytes(&bytes)
@@ -821,7 +822,11 @@ impl EditorModel {
         Ok(())
     }
 
-    pub fn add_model_instance(&mut self, model_asset_id: &str, base_name: &str) -> Result<(), String> {
+    pub fn add_model_instance(
+        &mut self,
+        model_asset_id: &str,
+        base_name: &str,
+    ) -> Result<(), String> {
         let rec = self
             .level
             .assets
