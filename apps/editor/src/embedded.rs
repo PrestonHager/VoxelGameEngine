@@ -203,15 +203,6 @@ impl GlutinWindowContext {
         self.gl_display.get_proc_address(addr)
     }
 
-    fn set_vsync(&self, enabled: bool) {
-        use glutin::surface::GlSurface;
-        let interval = if enabled {
-            glutin::surface::SwapInterval::Wait(NonZeroU32::MIN)
-        } else {
-            glutin::surface::SwapInterval::DontWait
-        };
-        let _ = self.gl_surface.set_swap_interval(&self.gl_context, interval);
-    }
 }
 
 /// Present one Vulkan frame to the engine window.
@@ -292,6 +283,7 @@ struct Inner {
     fps_window_frames: u32,
     sim_accum_s: f32,
     vsync_enabled_applied: bool,
+    device_events_always: bool,
 }
 
 fn set_engine_input_capture(inner: &mut Inner, capture: bool) {
@@ -311,6 +303,18 @@ fn set_engine_input_capture(inner: &mut Inner, capture: bool) {
         inner.engine_input_captured = false;
         debug!(target: "vge_embedded", "engine input capture DISABLED");
     }
+}
+
+fn set_device_event_mode(event_loop: &ActiveEventLoop, inner: &mut Inner, always: bool) {
+    if inner.device_events_always == always {
+        return;
+    }
+    event_loop.listen_device_events(if always {
+        DeviceEvents::Always
+    } else {
+        DeviceEvents::WhenFocused
+    });
+    inner.device_events_always = always;
 }
 
 fn note_engine_present(inner: &mut Inner) {
@@ -390,10 +394,10 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        event_loop.listen_device_events(DeviceEvents::Always);
+        event_loop.listen_device_events(DeviceEvents::WhenFocused);
         debug!(
             target: "vge_embedded",
-            "device event mode set to Always"
+            "device event mode set to WhenFocused"
         );
         // SAFETY: `resumed` runs on the winit thread; GL context is created before use below.
         let gl_win = unsafe { GlutinWindowContext::new(event_loop) };
@@ -520,7 +524,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             "engine window handle ready for Vulkan surface"
         );
         // SAFETY: `engine_window` is a valid Vulkan `HasWindowHandle` surface target.
-        let vk = match unsafe { VulkanRenderer::new(engine_window.as_ref()) } {
+        let mut vk = match unsafe { VulkanRenderer::new(engine_window.as_ref()) } {
             Ok(r) => {
                 info!(target: "vge_embedded", "VulkanRenderer initialized for embedded engine window");
                 r
@@ -534,6 +538,19 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
 
         let mut model = EditorModel::new(self.port);
         crate::editor_state::apply_loaded_session(&mut model);
+        let project_vsync = model
+            .current_project
+            .as_ref()
+            .map(|p| p.vsync_enabled)
+            .unwrap_or(false);
+        // SAFETY: renderer is initialized and bound to this engine window.
+        if let Err(e) = unsafe { vk.set_vsync_enabled(engine_window.as_ref(), project_vsync) } {
+            warn!(
+                target: "vge_embedded",
+                error = %e,
+                "failed to apply initial project VSync"
+            );
+        }
         model.push_log(
             "Embedded editor: use Play or File to run; the 3D view follows the central viewport.",
         );
@@ -559,7 +576,8 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             fps_window_start: Instant::now(),
             fps_window_frames: 0,
             sim_accum_s: 0.0,
-            vsync_enabled_applied: false,
+            vsync_enabled_applied: project_vsync,
+            device_events_always: false,
         });
 
         if let Some(i) = &self.inner {
@@ -621,13 +639,24 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                     .map(|p| p.vsync_enabled)
                     .unwrap_or(false);
                 if project_vsync != inner.vsync_enabled_applied {
-                    inner.gl_win.set_vsync(project_vsync);
-                    inner.vsync_enabled_applied = project_vsync;
-                    inner.model.push_log(if project_vsync {
-                        "Project setting: VSync enabled."
-                    } else {
-                        "Project setting: VSync disabled (uncapped)."
-                    });
+                    // SAFETY: same renderer/window pair; this recreates swapchain resources.
+                    match unsafe {
+                        inner
+                            .vk
+                            .set_vsync_enabled(inner.engine_window.as_ref(), project_vsync)
+                    } {
+                        Ok(()) => {
+                            inner.vsync_enabled_applied = project_vsync;
+                            inner.model.push_log(if project_vsync {
+                                "Project setting: VSync enabled."
+                            } else {
+                                "Project setting: VSync disabled (uncapped)."
+                            });
+                        }
+                        Err(e) => inner
+                            .model
+                            .push_log(format!("Failed to apply project VSync: {e}")),
+                    }
                 }
 
                 {
@@ -880,6 +909,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
         };
 
         if inner.model.play_mode_active {
+            set_device_event_mode(event_loop, inner, true);
             // Keep capture sticky during play even if the OS/focus changes.
             if !inner.engine_input_captured {
                 set_engine_input_capture(inner, true);
@@ -904,6 +934,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
+        set_device_event_mode(event_loop, inner, false);
 
         if inner.repaint_delay.is_zero() {
             inner.gl_win.window().request_redraw();

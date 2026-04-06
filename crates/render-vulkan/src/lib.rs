@@ -73,6 +73,10 @@ fn cube_vertices() -> (Vec<Vertex>, Vec<u32>) {
     (verts, idx)
 }
 
+fn debug_disable_backface_cull() -> bool {
+    std::env::var_os("VGE_DISABLE_BACKFACE_CULL").is_some()
+}
+
 /// `SurfaceCapabilitiesKHR::current_extent` is `(0,0)` on some Win32 surfaces (e.g. child windows)
 /// until layout; treating that as valid makes `vkCreateSwapchainKHR` validation fail.
 ///
@@ -160,6 +164,7 @@ pub struct VulkanRenderer {
     _debug_loader: ash::ext::debug_utils::Instance,
     #[cfg(debug_assertions)]
     _debug_messenger: vk::DebugUtilsMessengerEXT,
+    vsync_enabled: bool,
 }
 
 impl VulkanRenderer {
@@ -302,6 +307,7 @@ impl VulkanRenderer {
             _debug_loader: debug_loader,
             #[cfg(debug_assertions)]
             _debug_messenger: debug_messenger,
+            vsync_enabled: false,
         };
 
         r.create_swapchain(window, None)?;
@@ -346,11 +352,15 @@ impl VulkanRenderer {
             .or_else(|| formats.first())
             .ok_or_else(|| RenderError::Msg("no surface formats".into()))?;
 
-        let present_mode = present_modes
-            .iter()
-            .copied()
-            .find(|&m| m == vk::PresentModeKHR::MAILBOX)
-            .unwrap_or(vk::PresentModeKHR::FIFO);
+        let present_mode = if self.vsync_enabled {
+            vk::PresentModeKHR::FIFO
+        } else if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+            vk::PresentModeKHR::MAILBOX
+        } else if present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            vk::PresentModeKHR::IMMEDIATE
+        } else {
+            vk::PresentModeKHR::FIFO
+        };
 
         let sz = window.inner_size();
         let (iw, ih, force_inner) = match inner_size_override {
@@ -415,6 +425,20 @@ impl VulkanRenderer {
         self.swapchain_views = views?;
 
         Ok(())
+    }
+
+    /// # Safety
+    /// Same requirements as [`Self::resize`]. Recreates swapchain-dependent resources when changed.
+    pub unsafe fn set_vsync_enabled(
+        &mut self,
+        window: &Window,
+        enabled: bool,
+    ) -> Result<(), RenderError> {
+        if self.vsync_enabled == enabled {
+            return Ok(());
+        }
+        self.vsync_enabled = enabled;
+        self.resize(window)
     }
 
     fn destroy_swapchain_chain(&mut self) {
@@ -805,12 +829,17 @@ impl VulkanRenderer {
             .viewports(&viewports)
             .scissors(&scissors);
 
+        let disable_cull = debug_disable_backface_cull();
         let raster = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            // Keep all faces visible for the debug/demo cube while index winding
-            // and per-instance orientation are being iterated.
-            .cull_mode(vk::CullModeFlags::NONE)
+            // Default to back-face culling for normal rendering performance.
+            // Set VGE_DISABLE_BACKFACE_CULL=1 only when debugging winding/visibility.
+            .cull_mode(if disable_cull {
+                vk::CullModeFlags::NONE
+            } else {
+                vk::CullModeFlags::BACK
+            })
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
 
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()

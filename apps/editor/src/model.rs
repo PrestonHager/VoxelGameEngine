@@ -3,6 +3,7 @@
 use scene::{AssetKind, AssetRecord, CameraAuthoring, Level, PlacedObject, ProjectDocument};
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::time::{Duration, Instant};
 use tracing::info;
 use uuid::Uuid;
 
@@ -24,7 +25,7 @@ pub enum FpsOverlayCorner {
     BottomRight,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EditorPreferences {
     #[serde(default = "default_true")]
     pub embedded_by_default: bool,
@@ -87,6 +88,8 @@ pub struct EditorModel {
     pub play_mode_capture_request: bool,
     /// Embedded runtime metric: rendered engine FPS (smoothed over ~0.5s windows).
     pub render_fps: f32,
+    /// Rate-limits disk reloads while a separate Preferences window may be open.
+    prefs_last_refresh: Instant,
 }
 
 impl EditorModel {
@@ -119,6 +122,7 @@ impl EditorModel {
             play_mode_active: false,
             play_mode_capture_request: false,
             render_fps: 0.0,
+            prefs_last_refresh: Instant::now(),
         }
     }
 
@@ -689,8 +693,12 @@ impl EditorModel {
         self.preferences = crate::editor_state::load_startup_preferences();
     }
 
-    pub fn reload_preferences_from_disk(&mut self) {
-        self.refresh_preferences_from_disk();
+    pub fn reload_preferences_from_disk_if_due(&mut self) {
+        const REFRESH_PERIOD: Duration = Duration::from_millis(500);
+        if self.prefs_last_refresh.elapsed() >= REFRESH_PERIOD {
+            self.refresh_preferences_from_disk();
+            self.prefs_last_refresh = Instant::now();
+        }
     }
 
     fn discover_project_script_files(&self) -> Result<Vec<PathBuf>, String> {

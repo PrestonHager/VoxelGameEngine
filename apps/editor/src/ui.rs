@@ -45,9 +45,9 @@ pub fn draw_editor_ui(
 ) {
     let is_embedded = embedded.is_some();
     if is_embedded {
-        // Preferences are edited in a separate process; refresh to reflect toggles
-        // like FPS overlay visibility/corner without restarting the editor.
-        model.reload_preferences_from_disk();
+        // Preferences are edited in a separate process; poll at a low cadence to
+        // pick up changes without re-reading from disk every frame.
+        model.reload_preferences_from_disk_if_due();
     }
     if embedded.is_none() {
         model.engine_viewport_px = None;
