@@ -12,7 +12,6 @@ members = [
     "crates/api",
     "crates/platform",
     "crates/logging",
-    "apps/engine-runner",
     "apps/editor",
     "shared/protocol",
     "shared/formats",
@@ -20,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 # Replace with your public clone URL when publishing.

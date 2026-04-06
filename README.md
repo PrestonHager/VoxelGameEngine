@@ -11,12 +11,12 @@ Workspace layout matches [`agents.md`](agents.md): `ash`-based Vulkan rendering,
 
 ```bash
 cargo build --workspace
-cargo run -p engine-runner
+cargo run -p editor -- engine-runner
 ```
 
 ## Editor (MVP)
 
-The **editor** (`apps/editor`) is an egui shell for **placing prefabs** (including a **Camera** that drives the engine view), editing **terrain** (flat slab + material/height), and saving **levels** as JSON. By default it can **start `engine-runner`** if nothing is listening on the IPC port, and **Push to engine** reloads the level file over IPC. With **`VGE_EMBEDDED=1`**, the same binary runs **OpenGL egui + a Vulkan child window** (parented on Windows/X11 when supported) and **Push** applies the level **in-process** (no separate engine).
+The **editor** (`apps/editor`) is a **single executable**: it hosts the UI and, in **embedded** mode (default), an in-process Vulkan view. For a **separate** engine window, run **`--no-embedded`** or start the same binary with the **`engine-runner`** subcommand (see below). If nothing is listening on the IPC port in external mode, the editor spawns **`editor engine-runner`** next to itself. **Push to engine** reloads the level file over IPC to that host.
 
 **Full walkthrough:** Sphinx [Editor (MVP)](docs/source/editor.rst) (build with `sphinx-build`, see [Docs](#docs) below).
 
@@ -26,7 +26,7 @@ Terminal A — engine (must use the same port as the editor):
 
 ```bash
 export VGE_IPC_PORT=7878   # Linux/macOS — omit on Windows or use set VAR=...
-cargo run -p engine-runner
+cargo run -p editor -- engine-runner
 ```
 
 Terminal B — editor:
@@ -40,7 +40,7 @@ Windows PowerShell:
 
 ```powershell
 $env:VGE_IPC_PORT = "7878"
-cargo run -p engine-runner
+cargo run -p editor -- engine-runner
 ```
 
 ```powershell
@@ -48,23 +48,22 @@ $env:VGE_IPC_PORT = "7878"
 cargo run -p editor
 ```
 
-Or from the repo root: `.\scripts\run-editor.ps1` (optional `-Port`, `-Release`).
-
-**Embedded editor (single process):**
+**Embedded editor (default — single process):**
 
 ```bash
-export VGE_EMBEDDED=1
 cargo run -p editor
 ```
+
+**External engine window** (eframe + separate Vulkan host): `cargo run -p editor -- --no-embedded`
 
 ### Environment variables
 
 | Variable | Purpose |
 |----------|---------|
 | `VGE_IPC_PORT` | TCP port for editor ↔ engine IPC (editor defaults to **7878** if unset). |
-| `VGE_ENGINE_EXE` | Optional path to `engine-runner` when it is not next to `editor` (e.g. after `cargo run`, both live under `target/debug`). |
-| `VGE_EMBEDDED` | Set to `1` to run the editor with an in-process Vulkan **Engine view** window instead of spawning `engine-runner`. |
-| `VGE_LUA_SCRIPT` | Path to a `.lua` file loaded by **engine-runner** and the embedded editor (see [Scripting](#lua-scripting-ecs-hooks)). |
+| `VGE_ENGINE_EXE` | Optional path to the **`editor`** binary (or legacy `engine-runner`) when auto-spawn cannot use `current_exe()`. |
+| `VGE_EMBEDDED` | `1`/`true` forces embedded; `0`/`false` forces external mode (see `config.rs`). Default is embedded. |
+| `VGE_LUA_SCRIPT` | Path to a `.lua` file loaded by the engine host (embedded or `editor engine-runner`) (see [Scripting](#lua-scripting-ecs-hooks)). |
 
 ### Using the UI
 
@@ -72,7 +71,7 @@ cargo run -p editor
 - **Right — Scene:** select instances, rename, set **x/y/z**, toggle **visible**, delete. **Terrain (MVP):** `surface_material`, `base_height_voxels` (flat mode only).
 - **Center:** level name, **Level file** path, **Save / Load**, **Push to engine** (IPC or in-process when embedded), **Ping engine** (external mode only), log output.
 
-**Push to engine** (external mode) requires the level file to be readable by `engine-runner` (same machine). Use an absolute path in **Level file** if needed.
+**Push to engine** (external mode) requires the level file to be readable by the **engine host process** (same machine). Use an absolute path in **Level file** if needed.
 
 ### Level files
 
@@ -98,7 +97,7 @@ Stable IDs are stored in level JSON as `prefab_id`. See [`docs/source/prefabs.rs
 | 8 | Terrain marker | Environment |
 | 9 | Camera | Utility |
 
-The **Camera** prefab spawns an ECS **camera rig**; the **first active** camera in the world supplies the view matrix for `engine-runner` / embedded view (see `ecs::CameraRig`).
+The **Camera** prefab spawns an ECS **camera rig**; the **first active** camera in the world supplies the view matrix for the engine host / embedded view (see `ecs::CameraRig`).
 
 In Rust, use `scene::ids::CUBE`, `scene::ids::CAMERA`, etc.
 
@@ -110,7 +109,7 @@ Terminal A:
 
 ```bash
 set VGE_IPC_PORT=7878
-cargo run -p engine-runner
+cargo run -p editor -- engine-runner
 ```
 
 Terminal B:

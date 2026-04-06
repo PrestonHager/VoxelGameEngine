@@ -1227,22 +1227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine-runner"
-version = "0.1.0"
-dependencies = [
- "ash",
- "engine-core",
- "glam",
- "logging",
- "platform",
- "protocol",
- "render-vulkan",
- "scene",
- "tracing",
- "winit",
-]
-
-[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

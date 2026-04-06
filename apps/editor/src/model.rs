@@ -196,7 +196,7 @@ impl EditorModel {
             Ok(Some(child)) => {
                 self.auto_started = Some(child);
                 self.push_log(format!(
-                    "Started engine-runner next to this binary (port {}).",
+                    "Started external engine (same binary, `engine-runner` subcommand) on port {}.",
                     self.port
                 ));
             }

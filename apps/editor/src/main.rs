@@ -1,8 +1,9 @@
-//! Editor shell: prefab library + level authoring + optional embedded Vulkan view (`--embedded` or `VGE_EMBEDDED`).
+//! Editor shell: prefab library + level authoring + embedded Vulkan by default (`--no-embedded` opt-out).
 
 mod config;
 mod editor_state;
 mod embedded;
+mod engine_runner;
 mod launcher;
 mod model;
 mod ui;
@@ -12,6 +13,12 @@ use model::EditorModel;
 use ui::draw_editor_ui;
 
 fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "engine-runner" {
+        engine_runner::run();
+        return Ok(());
+    }
+
     logging::init();
     let port: u16 = std::env::var("VGE_IPC_PORT")
         .ok()
@@ -20,7 +27,7 @@ fn main() -> eframe::Result {
 
     if config::embedded_mode_requested() {
         tracing::info!(
-            "starting embedded editor (use --embedded or VGE_EMBEDDED=1; see config.rs docs)"
+            "starting embedded editor (default mode; pass --no-embedded for separate engine window)"
         );
         if let Err(e) = embedded::run_embedded(port) {
             eprintln!("embedded editor failed: {e}");
@@ -31,7 +38,7 @@ fn main() -> eframe::Result {
 
     tracing::info!(
         target: "vge_embedded",
-        "using eframe + external engine-runner (not embedded). For in-process Vulkan + child window, use: cargo run -p editor -- --embedded   or   PowerShell: $env:VGE_EMBEDDED='1'; cargo run -p editor"
+        "using eframe + external engine-runner (--no-embedded). Embedded is default; unset --no-embedded to use in-process Vulkan view."
     );
     tracing::debug!(
         target: "vge_embedded",

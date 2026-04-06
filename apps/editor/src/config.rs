@@ -2,38 +2,46 @@
 
 use tracing::debug;
 
-/// True if the user asked for in-process Vulkan + egui.
+/// True when editor should run in-process Vulkan + egui.
 ///
-/// - **CLI:** pass `--embedded` or `-e` (works on all shells).
-/// - **Env:** `VGE_EMBEDDED` set to `1`, `true`, `yes`, or `on` (case-insensitive).
+/// Default is embedded mode.
 ///
-/// Note: POSIX syntax `VGE_EMBEDDED=1 cargo run …` does **not** set the variable on **cmd.exe**
-/// or **PowerShell**. Use:
+/// - **CLI opt-out:** pass `--no-embedded` to force the external engine window mode.
+/// - **CLI opt-in alias:** `--embedded` / `-e` (kept for compatibility).
+/// - **Env override:** `VGE_EMBEDDED` set to `1/true/yes/on` (embedded) or
+///   `0/false/no/off` (external), case-insensitive.
 ///
-/// - `cargo run -p editor -- --embedded`
-/// - PowerShell: `$env:VGE_EMBEDDED = "1"; cargo run -p editor`
-/// - cmd: `set VGE_EMBEDDED=1 && cargo run -p editor`
+/// Note: POSIX syntax `VGE_EMBEDDED=0 cargo run …` does **not** set the variable on
+/// **cmd.exe** or **PowerShell**. Use:
+///
+/// - `cargo run -p editor -- --no-embedded`
+/// - PowerShell: `$env:VGE_EMBEDDED = "0"; cargo run -p editor`
+/// - cmd: `set VGE_EMBEDDED=0 && cargo run -p editor`
 pub fn embedded_mode_requested() -> bool {
-    let from_cli = std::env::args()
-        .skip(1)
-        .any(|a| a == "--embedded" || a == "-e");
-    if from_cli {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--no-embedded") {
+        debug!(target: "vge_embedded", "embedded_mode_requested: false (--no-embedded)");
+        return false;
+    }
+    if args.iter().any(|a| a == "--embedded" || a == "-e") {
         debug!(target: "vge_embedded", "embedded_mode_requested: true (--embedded or -e)");
         return true;
     }
-    let from_env = std::env::var("VGE_EMBEDDED")
-        .map(|s| {
-            matches!(
-                s.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false);
+    let from_env = std::env::var("VGE_EMBEDDED").ok().and_then(|s| {
+        let v = s.trim().to_ascii_lowercase();
+        if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
+            Some(true)
+        } else if matches!(v.as_str(), "0" | "false" | "no" | "off") {
+            Some(false)
+        } else {
+            None
+        }
+    });
     debug!(
         target: "vge_embedded",
         vge_embedded = ?std::env::var("VGE_EMBEDDED").ok(),
-        from_env,
+        from_env = ?from_env,
         "embedded_mode_requested (env)"
     );
-    from_env
+    from_env.unwrap_or(true)
 }
