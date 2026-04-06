@@ -8,17 +8,33 @@ use mlua::{Function, Lua, Table, Value};
 use scene::Level;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CursorCommands {
+    pub center_mouse: bool,
+    pub cursor_visible: Option<bool>,
+}
 
 pub struct ScriptHost {
     lua: Lua,
+    logs: Arc<Mutex<Vec<String>>>,
+    cursor_commands: Arc<Mutex<CursorCommands>>,
 }
 
 impl ScriptHost {
     pub fn from_file(path: &Path) -> Result<Self, ScriptError> {
         let lua = Lua::new();
+        harden_lua_env(&lua);
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let cursor_commands = Arc::new(Mutex::new(CursorCommands::default()));
         let src = std::fs::read_to_string(path)?;
         lua.load(src).set_name(path.display().to_string()).exec()?;
-        Ok(Self { lua })
+        Ok(Self {
+            lua,
+            logs,
+            cursor_commands,
+        })
     }
 
     /// Build VM when `VGE_LUA_SCRIPT` is set and/or the level assigns script assets to objects.
@@ -34,6 +50,9 @@ impl ScriptHost {
         }
 
         let lua = Lua::new();
+        harden_lua_env(&lua);
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let cursor_commands = Arc::new(Mutex::new(CursorCommands::default()));
 
         if let Some(p) = env_script.as_ref() {
             match std::fs::read_to_string(p) {
@@ -50,7 +69,11 @@ impl ScriptHost {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(target = "script", "lua table: {e}");
-                return Some(Self { lua });
+                return Some(Self {
+                    lua,
+                    logs,
+                    cursor_commands,
+                });
             }
         };
 
@@ -89,7 +112,11 @@ impl ScriptHost {
             tracing::warn!(target = "script", "set _entity_scripts: {e}");
         }
 
-        Some(Self { lua })
+        Some(Self {
+            lua,
+            logs,
+            cursor_commands,
+        })
     }
 
     pub fn tick(
@@ -97,6 +124,9 @@ impl ScriptHost {
         world: &mut World,
         entity_by_instance: &HashMap<u64, Entity>,
         dt: f32,
+        mouse_dx: f32,
+        mouse_dy: f32,
+        mouse_pos: Option<(f32, f32)>,
     ) -> Result<(), ScriptError> {
         let globals = self.lua.globals();
         let w_raw = world as *mut World as usize;
@@ -110,7 +140,17 @@ impl ScriptHost {
                     continue;
                 }
                 let instance_id = k as u64;
-                let api = create_api_table(&self.lua, w_raw, m_raw, instance_id)?;
+                let api = create_api_table(
+                    &self.lua,
+                    w_raw,
+                    m_raw,
+                    instance_id,
+                    mouse_dx,
+                    mouse_dy,
+                    mouse_pos,
+                    Arc::clone(&self.logs),
+                    Arc::clone(&self.cursor_commands),
+                )?;
                 func.call::<()>((dt as f64, api))?;
             }
         }
@@ -124,7 +164,17 @@ impl ScriptHost {
                     Value::Number(n) if n >= 0.0 => n as u64,
                     _ => continue,
                 };
-                let api = create_api_table(&self.lua, w_raw, m_raw, instance_id)?;
+                let api = create_api_table(
+                    &self.lua,
+                    w_raw,
+                    m_raw,
+                    instance_id,
+                    mouse_dx,
+                    mouse_dy,
+                    mouse_pos,
+                    Arc::clone(&self.logs),
+                    Arc::clone(&self.cursor_commands),
+                )?;
                 func.call::<()>((dt as f64, api))?;
             }
         }
@@ -136,6 +186,51 @@ impl ScriptHost {
 
         Ok(())
     }
+
+    pub fn drain_logs(&self) -> Vec<String> {
+        match self.logs.lock() {
+            Ok(mut logs) => std::mem::take(&mut *logs),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn push_host_log(&self, line: impl Into<String>) {
+        if let Ok(mut logs) = self.logs.lock() {
+            logs.push(line.into());
+        }
+    }
+
+    pub fn drain_cursor_commands(&self) -> CursorCommands {
+        match self.cursor_commands.lock() {
+            Ok(mut c) => {
+                let out = *c;
+                *c = CursorCommands::default();
+                out
+            }
+            Err(_) => CursorCommands::default(),
+        }
+    }
+}
+
+/// Apply a minimal, practical sandbox for gameplay scripts.
+///
+/// We disable libraries and helpers commonly used for filesystem/process/module
+/// access so project scripts cannot escape into host-level operations.
+fn harden_lua_env(lua: &Lua) {
+    let globals = lua.globals();
+    for name in [
+        "os",
+        "io",
+        "package",
+        "debug",
+        "dofile",
+        "loadfile",
+        "require",
+    ] {
+        if let Err(e) = globals.set(name, Value::Nil) {
+            tracing::warn!(target = "script", "sandbox disable {name}: {e}");
+        }
+    }
 }
 
 fn create_api_table(
@@ -143,13 +238,21 @@ fn create_api_table(
     world_raw: usize,
     map_raw: usize,
     default_instance: u64,
+    mouse_dx: f32,
+    mouse_dy: f32,
+    mouse_pos: Option<(f32, f32)>,
+    logs: Arc<Mutex<Vec<String>>>,
+    cursor_commands: Arc<Mutex<CursorCommands>>,
 ) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     t.set("default_instance", default_instance as mlua::Integer)?;
 
     t.set(
         "log",
-        lua.create_function(|_, s: String| {
+        lua.create_function(move |_, s: String| {
+            if let Ok(mut sink) = logs.lock() {
+                sink.push(s.clone());
+            }
             tracing::info!(target = "lua", "{s}");
             Ok(())
         })?,
@@ -198,6 +301,75 @@ fn create_api_table(
         })?,
     )?;
 
+    t.set(
+        "mouse_delta",
+        lua.create_function(move |_, ()| Ok((mouse_dx as f64, mouse_dy as f64)))?,
+    )?;
+    t.set(
+        "mouse_position",
+        lua.create_function(move |lua, ()| {
+            if let Some((x, y)) = mouse_pos {
+                let out = lua.create_table()?;
+                out.set("x", x)?;
+                out.set("y", y)?;
+                Ok(Value::Table(out))
+            } else {
+                Ok(Value::Nil)
+            }
+        })?,
+    )?;
+
+    let cursor_commands_center = Arc::clone(&cursor_commands);
+    t.set(
+        "center_mouse",
+        lua.create_function(move |_, ()| {
+            if let Ok(mut cmds) = cursor_commands_center.lock() {
+                cmds.center_mouse = true;
+            }
+            Ok(true)
+        })?,
+    )?;
+    let cursor_commands_visible = Arc::clone(&cursor_commands);
+    t.set(
+        "set_cursor_visible",
+        lua.create_function(move |_, visible: bool| {
+            if let Ok(mut cmds) = cursor_commands_visible.lock() {
+                cmds.cursor_visible = Some(visible);
+            }
+            Ok(true)
+        })?,
+    )?;
+
+    t.set(
+        "get_camera_angles",
+        lua.create_function(move |lua, instance_id: u64| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(Value::Nil);
+            };
+            let Some((yaw, pitch)) = world.camera_angles_of(*e) else {
+                return Ok(Value::Nil);
+            };
+            let out = lua.create_table()?;
+            out.set("yaw", yaw)?;
+            out.set("pitch", pitch)?;
+            Ok(Value::Table(out))
+        })?,
+    )?;
+
+    t.set(
+        "set_camera_angles",
+        lua.create_function(move |_, (instance_id, yaw, pitch): (u64, f32, f32)| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(false);
+            };
+            Ok(world.set_camera_angles(*e, yaw, pitch))
+        })?,
+    )?;
+
     Ok(t)
 }
 
@@ -216,9 +388,25 @@ fn tick_runs_in_memory_entity_script() {
     let tbl = lua.create_table().expect("table");
     tbl.set(42i64, f).expect("set hook");
     lua.globals().set("_entity_scripts", tbl).expect("globals");
-    let host = ScriptHost { lua };
+    let host = ScriptHost {
+        lua,
+        logs: Arc::new(Mutex::new(Vec::new())),
+        cursor_commands: Arc::new(Mutex::new(CursorCommands::default())),
+    };
     let mut world = World::default();
     let map = HashMap::new();
-    host.tick(&mut world, &map, 1.0 / 60.0)
+    host.tick(&mut world, &map, 1.0 / 60.0, 0.0, 0.0, None)
         .expect("tick without error");
+}
+
+#[cfg(test)]
+#[test]
+fn harden_lua_env_disables_dangerous_globals() {
+    let lua = Lua::new();
+    harden_lua_env(&lua);
+    let globals = lua.globals();
+    for name in ["os", "io", "package", "debug", "dofile", "loadfile", "require"] {
+        let v: Value = globals.get(name).expect("global read");
+        assert!(matches!(v, Value::Nil), "{name} should be nil");
+    }
 }

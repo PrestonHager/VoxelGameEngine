@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info};
 use winit::application::ApplicationHandler;
+use winit::event::DeviceEvent;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
@@ -56,6 +57,17 @@ struct RunnerApp {
 }
 
 impl ApplicationHandler for RunnerApp {
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.state.on_mouse_motion(delta.0, delta.1);
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = platform::default_window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
@@ -85,6 +97,9 @@ impl ApplicationHandler for RunnerApp {
                     }
                 }
                 window.request_redraw();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.state.on_cursor_moved(position.x, position.y);
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();

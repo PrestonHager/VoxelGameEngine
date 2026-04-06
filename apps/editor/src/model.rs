@@ -14,6 +14,16 @@ pub enum EditorMainTab {
     Assets,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FpsOverlayCorner {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EditorPreferences {
     #[serde(default = "default_true")]
@@ -22,6 +32,10 @@ pub struct EditorPreferences {
     pub external_editor_path: String,
     #[serde(default = "default_true")]
     pub use_internal_editor_by_default: bool,
+    #[serde(default)]
+    pub show_fps_overlay: bool,
+    #[serde(default)]
+    pub fps_overlay_corner: FpsOverlayCorner,
 }
 
 impl Default for EditorPreferences {
@@ -30,6 +44,8 @@ impl Default for EditorPreferences {
             embedded_by_default: true,
             external_editor_path: String::new(),
             use_internal_editor_by_default: true,
+            show_fps_overlay: false,
+            fps_overlay_corner: FpsOverlayCorner::TopLeft,
         }
     }
 }
@@ -65,6 +81,12 @@ pub struct EditorModel {
     pub engine_viewport_px: Option<(i32, i32, u32, u32)>,
     /// Embedded: set after Play applies the level so the winit loop uses `Poll` instead of `WaitUntil` (which can defer the engine redraw).
     pub pending_engine_repaint: bool,
+    /// Embedded play mode: when true, engine view should capture input and stay foreground.
+    pub play_mode_active: bool,
+    /// Embedded one-shot request: focus engine window + acquire input capture.
+    pub play_mode_capture_request: bool,
+    /// Embedded runtime metric: rendered engine FPS (smoothed over ~0.5s windows).
+    pub render_fps: f32,
 }
 
 impl EditorModel {
@@ -94,6 +116,9 @@ impl EditorModel {
             main_tab: EditorMainTab::default(),
             engine_viewport_px: None,
             pending_engine_repaint: false,
+            play_mode_active: false,
+            play_mode_capture_request: false,
+            render_fps: 0.0,
         }
     }
 
@@ -131,6 +156,20 @@ impl EditorModel {
                 self.status.clone_from(&e);
                 self.push_log(e);
             }
+        }
+    }
+
+    pub fn begin_play_mode(&mut self) {
+        self.play_mode_active = true;
+        self.play_mode_capture_request = true;
+        self.push_log("Play mode enabled (engine input captured). Press Esc or Stop to release.");
+    }
+
+    pub fn stop_play_mode(&mut self, reason: &str) {
+        if self.play_mode_active || self.play_mode_capture_request {
+            self.play_mode_active = false;
+            self.play_mode_capture_request = false;
+            self.push_log(reason.to_string());
         }
     }
 
@@ -227,6 +266,7 @@ impl EditorModel {
     }
 
     pub fn open_asset_file(&mut self, abs_path: &Path) -> Result<(), String> {
+        self.refresh_preferences_from_disk();
         if self.preferences.use_internal_editor_by_default {
             self.open_file_in_internal_editor(abs_path)
         } else if !self.preferences.external_editor_path.trim().is_empty() {
@@ -306,6 +346,71 @@ impl EditorModel {
         } else {
             scene::validate_relative_project_path(raw).unwrap_or_else(|_| ".".to_string())
         }
+    }
+
+    pub fn ensure_project_scripts_registered(&mut self) -> Result<(), String> {
+        let scripts = self.discover_project_script_files()?;
+        for abs in scripts {
+            let _ = self.ensure_script_asset_for_path(&abs)?;
+        }
+        Ok(())
+    }
+
+    pub fn browse_script_asset_for_object(&mut self) -> Result<Option<String>, String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("Lua script", &["lua"]);
+        if let Some(root) = self.project_root_dir() {
+            dialog = dialog.set_directory(root);
+        }
+        let Some(path) = dialog.pick_file() else {
+            return Ok(None);
+        };
+        let id = self.ensure_script_asset_for_path(&path)?;
+        Ok(Some(id))
+    }
+
+    pub fn ensure_script_asset_for_path(&mut self, path: &Path) -> Result<String, String> {
+        let abs = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let ext = abs
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "lua" {
+            return Err(format!("{} is not a .lua file", abs.display()));
+        }
+
+        let stored_path = if let Some(root) = self.project_root_dir() {
+            scene::make_project_relative_path(&root, &abs)
+                .map_err(|e| format!("script outside project root: {e}"))?
+        } else {
+            abs.to_string_lossy().into_owned()
+        };
+
+        if let Some(existing) = self
+            .level
+            .assets
+            .iter()
+            .find(|a| a.kind == AssetKind::Script && a.path == stored_path)
+        {
+            return Ok(existing.id.clone());
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let name = abs
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("script")
+            .to_string();
+        self.level.assets.push(AssetRecord {
+            id: id.clone(),
+            name,
+            kind: AssetKind::Script,
+            path: stored_path,
+        });
+        self.sync_project_assets_from_level();
+        Ok(id)
     }
 
     pub fn save_project_as_dialog(&mut self) {
@@ -577,6 +682,44 @@ impl EditorModel {
             "Opened in external editor: {}",
             abs_path.to_string_lossy()
         ));
+        Ok(())
+    }
+
+    fn refresh_preferences_from_disk(&mut self) {
+        self.preferences = crate::editor_state::load_startup_preferences();
+    }
+
+    pub fn reload_preferences_from_disk(&mut self) {
+        self.refresh_preferences_from_disk();
+    }
+
+    fn discover_project_script_files(&self) -> Result<Vec<PathBuf>, String> {
+        let Some(root) = self.project_root_dir() else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        Self::walk_collect_lua(&root, &mut out)?;
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    fn walk_collect_lua(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        let rd = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+        for entry in rd {
+            let entry = entry.map_err(|e| format!("read_dir entry {}: {e}", dir.display()))?;
+            let p = entry.path();
+            if p.is_dir() {
+                Self::walk_collect_lua(&p, out)?;
+            } else if p
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("lua"))
+                .unwrap_or(false)
+            {
+                out.push(p);
+            }
+        }
         Ok(())
     }
 

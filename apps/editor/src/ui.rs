@@ -1,9 +1,9 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{EditorMainTab, EditorModel};
+use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner};
 use eframe::egui;
-use eframe::egui::{menu, Button, Color32, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
+use eframe::egui::{menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
 use std::path::Path;
@@ -43,6 +43,12 @@ pub fn draw_editor_ui(
     model: &mut EditorModel,
     embedded: Option<&mut EngineState>,
 ) {
+    let is_embedded = embedded.is_some();
+    if is_embedded {
+        // Preferences are edited in a separate process; refresh to reflect toggles
+        // like FPS overlay visibility/corner without restarting the editor.
+        model.reload_preferences_from_disk();
+    }
     if embedded.is_none() {
         model.engine_viewport_px = None;
         model.bootstrap_external();
@@ -202,6 +208,13 @@ pub fn draw_editor_ui(
             }
 
             if let Some(id) = model.selected_instance {
+                // Keep script assignment changes deferred to avoid mutable borrow conflicts.
+                let mut assign_script: Option<Option<String>> = None;
+                let mut browse_script = false;
+                if let Err(e) = model.ensure_project_scripts_registered() {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                }
                 if let Some(o) = model.level.objects.iter_mut().find(|o| o.instance_id == id) {
                     ui.separator();
                     ui.label(format!("Edit #{}", id));
@@ -242,15 +255,18 @@ pub fn draw_editor_ui(
                                 .selectable_label(o.script_asset_id.is_none(), "None")
                                 .clicked()
                             {
-                                o.script_asset_id = None;
+                                assign_script = Some(None);
                             }
                             for (id, name) in &scripts {
                                 let chosen = o.script_asset_id.as_deref() == Some(id.as_str());
                                 if ui.selectable_label(chosen, name).clicked() {
-                                    o.script_asset_id = Some(id.clone());
+                                    assign_script = Some(Some(id.clone()));
                                 }
                             }
                         });
+                    if ui.button("Browse script…").clicked() {
+                        browse_script = true;
+                    }
 
                     if o.prefab_id == ids::CAMERA {
                         let cam = o.camera.get_or_insert_with(Default::default);
@@ -268,6 +284,27 @@ pub fn draw_editor_ui(
                             ui.add(egui::DragValue::new(&mut cam.pitch_deg).speed(0.5));
                         });
                         ui.checkbox(&mut cam.active, "active (first active wins)");
+                    }
+                }
+                if let Some(new_sel) = assign_script {
+                    if let Some(obj) = model.level.objects.iter_mut().find(|o| o.instance_id == id) {
+                        obj.script_asset_id = new_sel;
+                    }
+                }
+                if browse_script {
+                    match model.browse_script_asset_for_object() {
+                        Ok(Some(asset_id)) => {
+                            if let Some(obj) =
+                                model.level.objects.iter_mut().find(|o| o.instance_id == id)
+                            {
+                                obj.script_asset_id = Some(asset_id);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            model.status.clone_from(&e);
+                            model.push_log(e);
+                        }
                     }
                 }
             }
@@ -310,6 +347,41 @@ pub fn draw_editor_ui(
     });
 
     draw_code_editor_window(ctx, model);
+
+    if is_embedded && model.preferences.show_fps_overlay {
+        if let Some((vx, vy, vw, vh)) = model.engine_viewport_px {
+            let ppp = ctx.pixels_per_point();
+            let min_x = vx as f32 / ppp;
+            let min_y = vy as f32 / ppp;
+            let max_x = (vx as f32 + vw as f32) / ppp;
+            let max_y = (vy as f32 + vh as f32) / ppp;
+            let pad = 8.0;
+            let box_w = 104.0;
+            let box_h = 28.0;
+            let pos = match model.preferences.fps_overlay_corner {
+                FpsOverlayCorner::TopLeft => egui::pos2(min_x + pad, min_y + pad),
+                FpsOverlayCorner::TopRight => egui::pos2(max_x - box_w - pad, min_y + pad),
+                FpsOverlayCorner::BottomLeft => egui::pos2(min_x + pad, max_y - box_h - pad),
+                FpsOverlayCorner::BottomRight => egui::pos2(max_x - box_w - pad, max_y - box_h - pad),
+            };
+            egui::Area::new("fps_overlay".into())
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos)
+                .show(ctx, |ui| {
+                    let text = format!("FPS: {:.1}", model.render_fps);
+                    egui::Frame::none()
+                        .fill(Color32::from_rgba_unmultiplied(16, 16, 20, 180))
+                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .font(FontId::monospace(14.0))
+                                    .color(Color32::from_rgb(180, 255, 180)),
+                            );
+                        });
+                });
+        }
+    }
 }
 
 fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&mut EngineState>) {
@@ -344,6 +416,27 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
         ui.label("Project file");
         ui.text_edit_singleline(&mut model.project_file_path);
     });
+    let mut project_vsync_changed = false;
+    if let Some(project) = model.current_project.as_mut() {
+        ui.collapsing("Project settings", |ui| {
+            project_vsync_changed = ui
+                .checkbox(&mut project.vsync_enabled, "Enable VSync")
+                .changed();
+            ui.label(
+                egui::RichText::new("When disabled (default), rendering runs uncapped.")
+                    .small()
+                    .weak(),
+            );
+        });
+    }
+    if project_vsync_changed {
+        if let Err(e) = model.save_project_file() {
+            model.status.clone_from(&e);
+            model.push_log(e);
+        } else {
+            model.status.clear();
+        }
+    }
 
     if !model.status.is_empty() {
         ui.colored_label(Color32::from_rgb(220, 140, 80), &model.status);
@@ -384,12 +477,17 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
                 model.status.clear();
             }
         }
-        let play = if is_embedded {
-            "▶ Play"
-        } else {
-            "▶ Play (push to engine)"
-        };
-        if ui.button(play).clicked() {
+        if is_embedded {
+            let play = if model.play_mode_active { "■ Stop" } else { "▶ Play" };
+            if ui.button(play).clicked() {
+                if model.play_mode_active {
+                    model.stop_play_mode("Play mode stopped.");
+                } else {
+                    model.begin_play_mode();
+                    play_clicked = true;
+                }
+            }
+        } else if ui.button("▶ Play (push to engine)").clicked() {
             play_clicked = true;
         }
     });

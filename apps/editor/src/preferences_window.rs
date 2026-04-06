@@ -1,11 +1,11 @@
 use crate::editor_state;
-use crate::model::{EditorModel, EditorPreferences};
+use crate::model::{EditorModel, EditorPreferences, FpsOverlayCorner};
 use eframe::egui;
 
 pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([700.0, 260.0])
+            .with_inner_size([700.0, 300.0])
             .with_title("Editor Preferences"),
         ..Default::default()
     };
@@ -57,6 +57,42 @@ impl eframe::App for PreferencesApp {
                 &mut self.prefs.use_internal_editor_by_default,
                 "Use in-editor code editor by default",
             );
+            ui.checkbox(
+                &mut self.prefs.show_fps_overlay,
+                "Show FPS overlay in embedded viewport",
+            );
+            ui.horizontal(|ui| {
+                ui.label("FPS overlay corner");
+                egui::ComboBox::from_id_salt("prefs_fps_corner")
+                    .selected_text(match self.prefs.fps_overlay_corner {
+                        FpsOverlayCorner::TopLeft => "Top left",
+                        FpsOverlayCorner::TopRight => "Top right",
+                        FpsOverlayCorner::BottomLeft => "Bottom left",
+                        FpsOverlayCorner::BottomRight => "Bottom right",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.prefs.fps_overlay_corner,
+                            FpsOverlayCorner::TopLeft,
+                            "Top left",
+                        );
+                        ui.selectable_value(
+                            &mut self.prefs.fps_overlay_corner,
+                            FpsOverlayCorner::TopRight,
+                            "Top right",
+                        );
+                        ui.selectable_value(
+                            &mut self.prefs.fps_overlay_corner,
+                            FpsOverlayCorner::BottomLeft,
+                            "Bottom left",
+                        );
+                        ui.selectable_value(
+                            &mut self.prefs.fps_overlay_corner,
+                            FpsOverlayCorner::BottomRight,
+                            "Bottom right",
+                        );
+                    });
+            });
             ui.label(
                 egui::RichText::new(
                     "CLI/env flags still override this default (`--no-embedded`, `--embedded`, `VGE_EMBEDDED`).",

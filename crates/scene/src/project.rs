@@ -16,6 +16,8 @@ pub struct ProjectDocument {
     pub default_level: Option<String>,
     #[serde(default)]
     pub assets: Vec<AssetRecord>,
+    #[serde(default)]
+    pub vsync_enabled: bool,
 }
 
 fn default_project_format_version() -> u32 {
@@ -80,9 +82,20 @@ pub fn resolve_project_path(project_root: &Path, rel_path: &str) -> Result<PathB
 }
 
 pub fn make_project_relative_path(project_root: &Path, abs_path: &Path) -> Result<String, ProjectError> {
-    let rel = abs_path
-        .strip_prefix(project_root)
-        .map_err(|_| ProjectError::PathTraversal)?;
+    // Try fast path first.
+    let rel = match abs_path.strip_prefix(project_root) {
+        Ok(rel) => rel.to_path_buf(),
+        Err(_) => {
+            // On Windows, canonicalized paths may use verbatim prefixes (\\?\) which makes a
+            // lexical strip_prefix against a non-canonical root fail. Normalize both sides.
+            let root_norm = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+            let abs_norm = abs_path.canonicalize().unwrap_or_else(|_| abs_path.to_path_buf());
+            abs_norm
+                .strip_prefix(&root_norm)
+                .map_err(|_| ProjectError::PathTraversal)?
+                .to_path_buf()
+        }
+    };
     validate_relative_project_path(&rel.to_string_lossy())
 }
 
@@ -93,6 +106,7 @@ impl ProjectDocument {
             name,
             default_level: None,
             assets: Vec::new(),
+            vsync_enabled: false,
         }
     }
 
@@ -185,6 +199,7 @@ mod tests {
         assert_eq!(back.name, "Demo");
         assert_eq!(back.default_level.as_deref(), Some("levels/main.vge.json"));
         assert_eq!(back.assets.len(), 1);
+        assert!(!back.vsync_enabled);
     }
 
     #[test]
@@ -198,6 +213,24 @@ mod tests {
         let root = Path::new("/tmp/project");
         let p = resolve_project_path(root, "assets/tex/a.png").expect("resolve");
         assert_eq!(p, Path::new("/tmp/project/assets/tex/a.png"));
+    }
+
+    #[test]
+    fn make_project_relative_path_handles_canonical_mismatch() {
+        let base = std::env::temp_dir().join(format!("vge-project-{}", Uuid::new_v4()));
+        let root = base.join("Demo Project");
+        let scripts = root.join("scripts");
+        std::fs::create_dir_all(&scripts).expect("mkdir scripts");
+        let script = scripts.join("camera.lua");
+        std::fs::write(&script, "-- test").expect("write script");
+
+        let root_noncanonical = root.join(".");
+        let script_canonical = script.canonicalize().expect("canonical script");
+        let rel =
+            make_project_relative_path(&root_noncanonical, &script_canonical).expect("relative");
+        assert_eq!(rel, "scripts/camera.lua");
+
+        let _ = std::fs::remove_dir_all(base);
     }
 }
 

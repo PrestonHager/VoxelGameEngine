@@ -336,6 +336,29 @@ impl World {
         true
     }
 
+    pub fn camera_angles_of(&self, entity: Entity) -> Option<(f32, f32)> {
+        let m = self.entities.get(entity.index as usize)?;
+        if !m.alive || m.generation != entity.generation || m.archetype_id != 3 {
+            return None;
+        }
+        let c = self.archetype_pos_camera.cameras[m.row];
+        Some((c.yaw, c.pitch))
+    }
+
+    pub fn set_camera_angles(&mut self, entity: Entity, yaw: f32, pitch: f32) -> bool {
+        let Some(m) = self.entities.get(entity.index as usize) else {
+            return false;
+        };
+        if !m.alive || m.generation != entity.generation || m.archetype_id != 3 {
+            return false;
+        }
+        let row = m.row;
+        let c = &mut self.archetype_pos_camera.cameras[row];
+        c.yaw = yaw;
+        c.pitch = pitch;
+        true
+    }
+
     pub fn positions(&self) -> impl Iterator<Item = (Entity, Position)> + '_ {
         self.archetype_pos_only
             .entities

@@ -8,7 +8,7 @@ use crate::model::{EditorMainTab, EditorModel, EditorPreferences};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 use tracing::warn;
 
@@ -102,17 +102,13 @@ pub fn apply_loaded_session(model: &mut EditorModel) {
 
     model.level_path = path.clone();
 
-    if Path::new(&path).is_file() {
-        if let Err(e) = model.load_level_file() {
-            model.status.clone_from(&e);
-            model.push_log(e);
-        } else {
-            model.push_log(format!("Restored project: {path}"));
-        }
+    if let Err(e) = model.load_level_file() {
+        // Use model path resolution (project-root aware) so relative paths like
+        // `levels/main.vge.json` restore correctly when a project is open.
+        model.status.clone_from(&e);
+        model.push_log(format!("Could not restore saved level path {path}: {e}"));
     } else {
-        let msg = format!("Saved level path not found: {path}");
-        model.status.clone_from(&msg);
-        model.push_log(msg);
+        model.push_log(format!("Restored level: {path}"));
     }
 }
 
@@ -210,6 +206,8 @@ mod tests {
                 embedded_by_default: false,
                 external_editor_path: "C:\\Editor\\Code.exe".into(),
                 use_internal_editor_by_default: false,
+                show_fps_overlay: true,
+                fps_overlay_corner: crate::model::FpsOverlayCorner::BottomRight,
             },
             main_tab: EditorMainTab::Level,
         };
@@ -224,6 +222,11 @@ mod tests {
             "C:\\Editor\\Code.exe"
         );
         assert!(!back.preferences.use_internal_editor_by_default);
+        assert!(back.preferences.show_fps_overlay);
+        assert_eq!(
+            back.preferences.fps_overlay_corner,
+            crate::model::FpsOverlayCorner::BottomRight
+        );
         assert_eq!(back.main_tab, s.main_tab);
     }
 
@@ -236,7 +239,9 @@ mod tests {
             "preferences": {
                 "embedded_by_default": true,
                 "external_editor_path": "",
-                "use_internal_editor_by_default": true
+                "use_internal_editor_by_default": true,
+                "show_fps_overlay": false,
+                "fps_overlay_corner": "top_left"
             },
             "main_tab": "level"
         });
