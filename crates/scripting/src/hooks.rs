@@ -205,3 +205,27 @@ fn create_api_table(
 
     Ok(t)
 }
+
+#[cfg(test)]
+#[test]
+fn tick_runs_in_memory_entity_script() {
+    use ecs::World;
+    use mlua::{Function, Lua};
+    use std::collections::HashMap;
+
+    let lua = Lua::new();
+    let f: Function = lua
+        .load("return function(dt, api) end")
+        .eval()
+        .expect("chunk returns function");
+    let tbl = lua.create_table().expect("table");
+    tbl.set(42i64, f).expect("set hook");
+    lua.globals()
+        .set("_entity_scripts", tbl)
+        .expect("globals");
+    let host = ScriptHost { lua };
+    let mut world = World::default();
+    let map = HashMap::new();
+    host.tick(&mut world, &map, 1.0 / 60.0)
+        .expect("tick without error");
+}

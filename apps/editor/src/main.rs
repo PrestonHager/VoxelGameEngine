@@ -27,6 +27,16 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    tracing::info!(
+        target: "vge_embedded",
+        "using eframe + external engine-runner (not embedded). For in-process Vulkan + child window, use: cargo run -p editor -- --embedded   or   PowerShell: $env:VGE_EMBEDDED='1'; cargo run -p editor"
+    );
+    tracing::debug!(
+        target: "vge_embedded",
+        args = ?std::env::args().collect::<Vec<_>>(),
+        "process argv (embedded not requested)"
+    );
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 780.0])

@@ -6,6 +6,7 @@ use eframe::egui;
 use eframe::egui::{menu, Button, Color32, KeyboardShortcut, Key, Modifiers, Sense, Stroke};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
+use tracing::debug;
 
 fn kb_open() -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND, Key::O)
@@ -98,6 +99,24 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Assets, "Assets");
         });
     });
+
+    if embedded.is_some() {
+        egui::TopBottomPanel::bottom("embedded_log")
+            .resizable(true)
+            .default_height(140.0)
+            .min_height(72.0)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Log").small().weak());
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for line in &model.log {
+                            ui.monospace(line);
+                        }
+                    });
+            });
+    }
 
     egui::SidePanel::left("prefabs")
         .default_width(200.0)
@@ -242,6 +261,12 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
             }
             EditorMainTab::Assets => {
                 if embedded.is_some() {
+                    if model.engine_viewport_px.is_some() {
+                        debug!(
+                            target: "vge_embedded",
+                            "clearing engine_viewport_px (Assets tab hides embedded 3D view)"
+                        );
+                    }
                     model.engine_viewport_px = None;
                 }
                 draw_assets_tab(ui, model);
@@ -265,7 +290,7 @@ fn draw_level_tab(
         .weak());
     } else {
         ui.label(egui::RichText::new(
-            "Embedded: the 3D view is a frameless child window aligned to the viewport below. Use File ▶ Open/Save. Play applies the level in-process.",
+            "Frameless 3D view is embedded in the center (child window). File ▶ Open/Save. ▶ Play applies in-process.",
         )
         .weak());
     }
@@ -334,42 +359,49 @@ fn draw_level_tab(
     }
 
     if is_embedded {
-        const LOG_BLOCK: f32 = 156.0;
         ui.add_space(4.0);
         let ppp = ui.ctx().pixels_per_point();
         let w = ui.available_width();
-        let h = (ui.available_height() - LOG_BLOCK).max(80.0);
+        let h = ui.available_height().max(120.0);
         let (_, response) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
         let rect = response.rect;
-        ui.painter().rect(
+        // Stroke only: avoid painting an opaque egui layer over the same pixels as the child
+        // Vulkan HWND (reduces parent/child "ghost" smear on Windows).
+        ui.painter().rect_stroke(
             rect,
             3.0,
-            Color32::from_rgb(22, 22, 26),
             Stroke::new(1.0, Color32::from_rgb(60, 60, 68)),
         );
-        model.engine_viewport_px = Some((
+        let px = (
             (rect.min.x * ppp).round() as i32,
             (rect.min.y * ppp).round() as i32,
             (rect.width() * ppp).round().max(1.0) as u32,
             (rect.height() * ppp).round().max(1.0) as u32,
-        ));
+        );
+        debug!(
+            target: "vge_embedded",
+            rect_points = ?rect,
+            pixels_per_point = ppp,
+            screen_rect = ?ui.ctx().screen_rect(),
+            viewport_px = ?px,
+            "Level tab: engine viewport rect (points → physical px for winit child overlay)"
+        );
+        model.engine_viewport_px = Some(px);
     } else {
         model.engine_viewport_px = None;
     }
 
-    ui.separator();
-    let log_h = if is_embedded {
-        140.0
-    } else {
-        ui.available_height().max(80.0)
-    };
-    egui::ScrollArea::vertical()
-        .max_height(log_h)
-        .show(ui, |ui| {
-            for line in &model.log {
-                ui.monospace(line);
-            }
-        });
+    if !is_embedded {
+        ui.separator();
+        let log_h = ui.available_height().max(80.0);
+        egui::ScrollArea::vertical()
+            .max_height(log_h)
+            .show(ui, |ui| {
+                for line in &model.log {
+                    ui.monospace(line);
+                }
+            });
+    }
 }
 
 fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {

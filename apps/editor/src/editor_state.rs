@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use thiserror::Error;
+use tracing::warn;
 
 const FORMAT_VERSION: u32 = 1;
 const APP_CONFIG_DIR: &str = "VoxelGameEngine";
@@ -21,6 +23,14 @@ pub struct EditorSessionState {
     pub main_tab: EditorMainTab,
 }
 
+#[derive(Debug, Error)]
+pub enum EditorStateError {
+    #[error("io: {0}")]
+    Io(#[from] io::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
 /// Resolved config directory for this app, if the OS provides one.
 pub fn config_dir_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join(APP_CONFIG_DIR))
@@ -30,16 +40,36 @@ pub fn state_file_path() -> Option<PathBuf> {
     config_dir_path().map(|d| d.join(STATE_FILE))
 }
 
-pub fn load() -> Option<EditorSessionState> {
-    let path = state_file_path()?;
-    let data = fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&data).ok()
+/// Load persisted session, if the state file exists and parses.
+///
+/// Missing file or empty file yields `Ok(None)`. I/O or JSON errors are returned so corrupt
+/// data is visible to callers.
+pub fn load() -> Result<Option<EditorSessionState>, EditorStateError> {
+    let path = match state_file_path() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let data = match fs::read_to_string(&path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(EditorStateError::Io(e)),
+        Ok(s) => s,
+    };
+    if data.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&data)?))
 }
 
 /// Restore last tab and level path; loads the level from disk when the file exists.
 pub fn apply_loaded_session(model: &mut EditorModel) {
-    let Some(s) = load() else {
-        return;
+    let s = match load() {
+        Ok(Some(s)) => s,
+        Ok(None) => return,
+        Err(e) => {
+            warn!(target = "editor_state", "failed to load editor session: {e}");
+            model.push_log(format!("Could not load editor session: {e}"));
+            return;
+        }
     };
     if s.format_version > FORMAT_VERSION {
         model.push_log(
@@ -88,7 +118,42 @@ pub fn save_from_model(model: &EditorModel) -> io::Result<()> {
     };
     let json = serde_json::to_string_pretty(&state)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let mut f = fs::File::create(path)?;
+
+    let tmp_path = path.with_extension("json.tmp");
+    let mut f = fs::File::create(&tmp_path)?;
     f.write_all(json.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    fs::rename(&tmp_path, &path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_json_roundtrip() {
+        let s = EditorSessionState {
+            format_version: FORMAT_VERSION,
+            level_path: "C:\\proj\\level.json".into(),
+            main_tab: EditorMainTab::Level,
+        };
+        let json = serde_json::to_string_pretty(&s).unwrap();
+        let back: EditorSessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.format_version, s.format_version);
+        assert_eq!(back.level_path, s.level_path);
+        assert_eq!(back.main_tab, s.main_tab);
+    }
+
+    #[test]
+    fn future_format_version_is_detectable() {
+        let v: serde_json::Value = serde_json::json!({
+            "format_version": 999,
+            "level_path": "",
+            "main_tab": "level"
+        });
+        let s: EditorSessionState = serde_json::from_value(v).unwrap();
+        assert!(s.format_version > FORMAT_VERSION);
+    }
 }

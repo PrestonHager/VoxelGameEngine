@@ -7,7 +7,14 @@ use tracing::info;
 use uuid::Uuid;
 
 #[derive(
-    Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum EditorMainTab {
@@ -213,6 +220,10 @@ impl EditorModel {
             return;
         }
         self.bootstrap_done = true;
+        tracing::info!(
+            target: "vge_embedded",
+            "bootstrap_embedded: UI will drive engine_viewport_px on Level tab"
+        );
         self.push_log("Embedded mode: Vulkan view is a child of the editor window when the OS allows it.");
     }
 

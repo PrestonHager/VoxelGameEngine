@@ -247,3 +247,59 @@ impl EngineState {
         inst
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::IVec3;
+    use scene::{ids, AssetKind, AssetRecord, PlacedObject, TerrainLayer, TerrainMode};
+
+    fn minimal_level() -> Level {
+        let mut level = Level {
+            name: "Unit".into(),
+            ..Default::default()
+        };
+        level.terrain = TerrainLayer {
+            mode: TerrainMode::Flat,
+            surface_material: 3,
+            base_height_voxels: 1,
+        };
+        level.objects.push(PlacedObject {
+            instance_id: 100,
+            prefab_id: ids::SPAWN_POINT,
+            name: "Spawn".into(),
+            position: [0.0, 0.0, 0.0],
+            visible: true,
+            camera: None,
+            script_asset_id: None,
+        });
+        level.assets.push(AssetRecord {
+            id: "lua1".into(),
+            name: "noop".into(),
+            kind: AssetKind::Script,
+            path: "missing.lua".into(),
+        });
+        level
+    }
+
+    #[test]
+    fn from_level_spawns_visible_objects() {
+        let level = minimal_level();
+        let state = EngineState::from_level(&level);
+        assert_eq!(state.entity_by_instance.len(), 1);
+        assert!(state.entity_by_instance.contains_key(&100));
+    }
+
+    #[test]
+    fn from_level_applies_flat_terrain() {
+        let level = minimal_level();
+        let state = EngineState::from_level(&level);
+        let chunk = state
+            .voxel_world
+            .chunks
+            .get(&IVec3::ZERO)
+            .expect("terrain fills origin chunk");
+        assert!(chunk.get(0, 0, 0) > 0);
+        assert!(chunk.get(0, 1, 0) > 0);
+    }
+}

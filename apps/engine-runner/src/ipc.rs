@@ -1,6 +1,8 @@
 //! Background TCP listener for editor IPC (versioned `protocol` frames).
 
-use protocol::{decode_editor_message, encode_engine_message, EditorToEngine, EngineToEditor};
+use protocol::{
+    decode_editor_message, encode_engine_message, EditorToEngine, EngineToEditor, MAX_IPC_FRAME_BYTES,
+};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::Sender;
@@ -25,7 +27,7 @@ pub fn spawn_listener(port: u16, tx: Sender<EngineIpcOp>) {
         info!("IPC listening on {addr}");
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
-            let mut buf = vec![0u8; 64 * 1024];
+            let mut buf = vec![0u8; MAX_IPC_FRAME_BYTES];
             let n = match stream.read(&mut buf) {
                 Ok(n) => n,
                 Err(e) => {

@@ -177,6 +177,23 @@ mod tests {
             name: "Test".into(),
             ..Default::default()
         };
+        level.terrain = TerrainLayer {
+            mode: TerrainMode::Flat,
+            surface_material: 7,
+            base_height_voxels: 2,
+        };
+        level.assets.push(AssetRecord {
+            id: "a1".into(),
+            name: "Mesh".into(),
+            kind: AssetKind::Vox,
+            path: "models/a.vox".into(),
+        });
+        level.assets.push(AssetRecord {
+            id: "s1".into(),
+            name: "Logic".into(),
+            kind: AssetKind::Script,
+            path: "scripts/hook.lua".into(),
+        });
         level.objects.push(PlacedObject {
             instance_id: 1,
             prefab_id: 1,
@@ -184,12 +201,46 @@ mod tests {
             position: [1.0, 2.0, 3.0],
             visible: true,
             camera: None,
-            script_asset_id: None,
+            script_asset_id: Some("s1".into()),
         });
         let s = level.to_json_pretty().unwrap();
         let back = Level::from_json_str(&s).unwrap();
         assert_eq!(back.name, level.name);
+        assert_eq!(back.terrain.surface_material, 7);
+        assert_eq!(back.terrain.base_height_voxels, 2);
+        assert_eq!(back.assets.len(), 2);
         assert_eq!(back.objects.len(), 1);
         assert_eq!(back.objects[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(back.objects[0].script_asset_id.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn resolve_script_asset_path_rejects_non_script_assets() {
+        let level = Level {
+            assets: vec![AssetRecord {
+                id: "tex1".into(),
+                name: "Not a script".into(),
+                kind: AssetKind::Vox,
+                path: "/abs/fake.vox".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(level.resolve_script_asset_path("tex1").is_none());
+    }
+
+    #[test]
+    fn resolve_script_asset_path_accepts_script_kind() {
+        let abs = std::env::temp_dir().join("vge_scene_test_hook.lua");
+        let level = Level {
+            assets: vec![AssetRecord {
+                id: "s1".into(),
+                name: "Hook".into(),
+                kind: AssetKind::Script,
+                path: abs.to_string_lossy().into_owned(),
+            }],
+            ..Default::default()
+        };
+        let p = level.resolve_script_asset_path("s1").expect("script path");
+        assert_eq!(p, abs);
     }
 }
