@@ -646,7 +646,7 @@ impl VulkanRenderer {
 
         let v_size = (verts.len() * size_of::<Vertex>()) as u64;
         let i_size = (idx.len() * size_of::<u32>()) as u64;
-        let inst_size = (MAX_INSTANCES * size_of::<[f32; 3]>()) as u64;
+        let inst_size = (MAX_INSTANCES * size_of::<[f32; 6]>()) as u64;
 
         let (vb, vm) = create_buffer(
             &self.device,
@@ -750,7 +750,7 @@ impl VulkanRenderer {
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: (size_of::<f32>() * 3) as u32,
+                stride: (size_of::<f32>() * 6) as u32,
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -772,6 +772,12 @@ impl VulkanRenderer {
                 binding: 1,
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: 0,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 3,
+                binding: 1,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 12,
             },
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -802,7 +808,9 @@ impl VulkanRenderer {
         let raster = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
+            // Keep all faces visible for the debug/demo cube while index winding
+            // and per-instance orientation are being iterated.
+            .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
 
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
@@ -1025,7 +1033,7 @@ impl VulkanRenderer {
     /// Vulkan handles on `self` must remain valid; caller must not destroy the swapchain or device concurrently.
     pub unsafe fn draw_frame(
         &mut self,
-        instance_positions: &[[f32; 3]],
+        instance_data: &[[f32; 6]],
         view_proj: Mat4,
     ) -> Result<(), RenderError> {
         let frame = self.current_frame;
@@ -1050,8 +1058,8 @@ impl VulkanRenderer {
         };
         let image_index = image_index as usize;
 
-        let inst_n = instance_positions.len().min(MAX_INSTANCES);
-        let inst_bytes = inst_n * size_of::<[f32; 3]>();
+        let inst_n = instance_data.len().min(MAX_INSTANCES);
+        let inst_bytes = inst_n * size_of::<[f32; 6]>();
         if inst_n > 0 {
             let ptr = self.device.map_memory(
                 self.instance_mem,
@@ -1060,8 +1068,8 @@ impl VulkanRenderer {
                 vk::MemoryMapFlags::empty(),
             )?;
             std::ptr::copy_nonoverlapping(
-                instance_positions.as_ptr(),
-                ptr as *mut [f32; 3],
+                instance_data.as_ptr(),
+                ptr as *mut [f32; 6],
                 inst_n,
             );
             self.device.unmap_memory(self.instance_mem);

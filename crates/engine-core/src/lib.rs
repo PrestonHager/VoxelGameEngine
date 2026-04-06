@@ -250,7 +250,7 @@ impl EngineState {
             .unwrap_or(self.camera_pos)
     }
 
-    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 3]> {
+    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 6]> {
         let cam = self.camera_sample_position();
         let e = self.voxel_world.edge as i32;
         let cc = IVec3::new(
@@ -280,22 +280,25 @@ impl EngineState {
 
         let origin = Vec3::new((cc.x * e) as f32, (cc.y * e) as f32, (cc.z * e) as f32);
 
-        let mut inst: Vec<[f32; 3]> = self
+        let mut inst: Vec<[f32; 6]> = self
             .world
             .positions()
-            .map(|(_, p)| [p.0.x, p.0.y, p.0.z])
+            .map(|(e, p)| {
+                let r = self.world.rotation_of(e).map(|r| r.0).unwrap_or(Vec3::ZERO);
+                [p.0.x, p.0.y, p.0.z, r.x, r.y, r.z]
+            })
             .collect();
 
         let step = (self.mesh_scratch.positions.len() / 256).max(1);
         for (i, p) in self.mesh_scratch.positions.iter().enumerate() {
             if i % step == 0 {
                 let w = origin + *p;
-                inst.push([w.x, w.y, w.z]);
+                inst.push([w.x, w.y, w.z, 0.0, 0.0, 0.0]);
             }
         }
 
         if inst.is_empty() {
-            inst.push([0.0, 0.0, 0.0]);
+            inst.push([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         }
         inst.truncate(MAX_INSTANCES);
         inst

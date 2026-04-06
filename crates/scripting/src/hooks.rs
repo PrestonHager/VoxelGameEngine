@@ -2,7 +2,7 @@
 //! from level assets (`_entity_scripts` table, `return function(dt, api) ... end`).
 
 use crate::ScriptError;
-use ecs::{Entity, Position, Velocity, World};
+use ecs::{Entity, Position, Rotation, Velocity, World};
 use glam::Vec3;
 use mlua::{Function, Lua, Table, Value};
 use scene::Level;
@@ -274,6 +274,36 @@ fn create_api_table(
             out.set("y", p.0.y)?;
             out.set("z", p.0.z)?;
             Ok(Value::Table(out))
+        })?,
+    )?;
+    
+    t.set(
+        "get_rotation",
+        lua.create_function(move |lua, instance_id: u64| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(Value::Nil);
+            };
+            let Some(r) = world.rotation_of(*e) else {
+                return Ok(Value::Nil);
+            };
+            let out = lua.create_table()?;
+            out.set("pitch", r.0.x)?;
+            out.set("yaw", r.0.y)?;
+            out.set("roll", r.0.z)?;
+            Ok(Value::Table(out))
+        })?,
+    )?;
+    t.set(
+        "set_rotation",
+        lua.create_function(move |_, (instance_id, pitch, yaw, roll): (u64, f32, f32, f32)| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(false);
+            };
+            Ok(world.set_rotation(*e, Rotation(Vec3::new(pitch, yaw, roll))))
         })?,
     )?;
 

@@ -358,12 +358,17 @@ pub fn draw_editor_ui(
             let pad = 8.0;
             let box_w = 104.0;
             let box_h = 28.0;
-            let pos = match model.preferences.fps_overlay_corner {
-                FpsOverlayCorner::TopLeft => egui::pos2(min_x + pad, min_y + pad),
-                FpsOverlayCorner::TopRight => egui::pos2(max_x - box_w - pad, min_y + pad),
-                FpsOverlayCorner::BottomLeft => egui::pos2(min_x + pad, max_y - box_h - pad),
-                FpsOverlayCorner::BottomRight => egui::pos2(max_x - box_w - pad, max_y - box_h - pad),
+            // Embedded engine is a native child window and may occlude egui layers.
+            // Draw FPS just outside the viewport bounds so it stays visible.
+            let mut pos = match model.preferences.fps_overlay_corner {
+                FpsOverlayCorner::TopLeft => egui::pos2(min_x + pad, min_y - box_h - pad),
+                FpsOverlayCorner::TopRight => egui::pos2(max_x - box_w - pad, min_y - box_h - pad),
+                FpsOverlayCorner::BottomLeft => egui::pos2(min_x + pad, max_y + pad),
+                FpsOverlayCorner::BottomRight => egui::pos2(max_x - box_w - pad, max_y + pad),
             };
+            let screen = ctx.screen_rect();
+            pos.x = pos.x.clamp(screen.left() + 4.0, screen.right() - box_w - 4.0);
+            pos.y = pos.y.clamp(screen.top() + 4.0, screen.bottom() - box_h - 4.0);
             egui::Area::new("fps_overlay".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(pos)
