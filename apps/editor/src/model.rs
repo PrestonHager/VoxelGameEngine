@@ -344,9 +344,7 @@ impl EditorModel {
 
     pub fn selected_asset_rel_dir_normalized(&self) -> String {
         let raw = self.asset_browser_selected_rel_dir.trim();
-        if raw.is_empty() {
-            ".".to_string()
-        } else if raw == "." {
+        if raw.is_empty() || raw == "." {
             ".".to_string()
         } else {
             scene::validate_relative_project_path(raw).unwrap_or_else(|_| ".".to_string())

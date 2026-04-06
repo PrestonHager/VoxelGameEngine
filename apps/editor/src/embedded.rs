@@ -783,14 +783,13 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             if let WindowEvent::KeyboardInput { event, .. } = &event {
                 if event.state.is_pressed()
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                    && (inner.model.play_mode_active || inner.engine_input_captured)
                 {
-                    if inner.model.play_mode_active || inner.engine_input_captured {
-                        inner.model.stop_play_mode("Play mode stopped (Esc).");
-                        set_engine_input_capture(inner, false);
-                        inner.gl_win.window().request_redraw();
-                        inner.engine_window.request_redraw();
-                        return;
-                    }
+                    inner.model.stop_play_mode("Play mode stopped (Esc).");
+                    set_engine_input_capture(inner, false);
+                    inner.gl_win.window().request_redraw();
+                    inner.engine_window.request_redraw();
+                    return;
                 }
             }
 
@@ -866,12 +865,11 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state.is_pressed()
                         && matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                        && (inner.model.play_mode_active || inner.engine_input_captured)
                     {
-                        if inner.model.play_mode_active || inner.engine_input_captured {
-                            inner.model.stop_play_mode("Play mode stopped (Esc).");
-                            set_engine_input_capture(inner, false);
-                            inner.gl_win.window().request_redraw();
-                        }
+                        inner.model.stop_play_mode("Play mode stopped (Esc).");
+                        set_engine_input_capture(inner, false);
+                        inner.gl_win.window().request_redraw();
                     }
                 }
                 _ => {}
