@@ -1,4 +1,5 @@
-//! Locate `engine-runner`, spawn it with `VGE_IPC_PORT`, wait for the TCP listener.
+//! Spawn the external engine host: same binary as the editor with `engine-runner` subcommand
+//! (`editor engine-runner`), with `VGE_IPC_PORT` set. Waits for the TCP listener.
 
 use protocol::{decode_engine_message, encode_editor_message, EditorToEngine};
 use std::io::{Read, Write};
@@ -21,7 +22,10 @@ pub fn engine_listening(port: u16) -> bool {
     TcpStream::connect_timeout(&ipc_addr(port), CONNECT_TIMEOUT).is_ok()
 }
 
-/// Resolve path to `engine-runner` next to this binary, or `VGE_ENGINE_EXE`, or `PATH`.
+/// Resolve the executable used to run the external engine host.
+///
+/// Prefer **`VGE_ENGINE_EXE`** if set, then **this binary** (`editor` — use `engine-runner`
+/// as the first CLI argument), then a legacy **`engine-runner`** file next to the editor.
 pub fn engine_runner_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("VGE_ENGINE_EXE") {
         let path = PathBuf::from(p);
@@ -29,7 +33,11 @@ pub fn engine_runner_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let this = std::env::current_exe().ok()?;
+    if this.is_file() {
+        return Some(this);
+    }
+    let dir = this.parent()?.to_path_buf();
     let names: &[&str] = if cfg!(windows) {
         &["engine-runner.exe"]
     } else {
@@ -44,15 +52,26 @@ pub fn engine_runner_path() -> Option<PathBuf> {
     None
 }
 
-/// Spawn engine-runner with the given port; returns `None` if the executable was not found.
+/// Spawn the engine host with the given port; returns `None` if the executable was not found.
 pub fn spawn_engine(port: u16) -> Result<Child, String> {
     let exe = engine_runner_path().ok_or_else(|| {
-        "engine-runner not found next to editor and VGE_ENGINE_EXE unset".to_string()
+        "could not resolve engine executable (editor binary or VGE_ENGINE_EXE)".to_string()
     })?;
-    Command::new(&exe)
-        .env("VGE_IPC_PORT", port.to_string())
-        .spawn()
+    let mut cmd = Command::new(&exe);
+    cmd.env("VGE_IPC_PORT", port.to_string());
+    // Unified binary is `editor` / `editor.exe`; legacy standalone was `engine-runner`.
+    if is_unified_editor_binary(&exe) {
+        cmd.arg("engine-runner");
+    }
+    cmd.spawn()
         .map_err(|e| format!("spawn {}: {e}", exe.display()))
+}
+
+fn is_unified_editor_binary(exe: &std::path::Path) -> bool {
+    exe.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("editor"))
+        .unwrap_or(false)
 }
 
 /// Block until `engine_listening` or timeout after spawn.

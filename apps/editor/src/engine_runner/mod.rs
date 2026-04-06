@@ -1,4 +1,6 @@
-//! Minimal game host: Vulkan + ECS + voxel stream sampling.
+//! Standalone Vulkan engine host (same binary as editor: `editor engine-runner`).
+//!
+//! Spawned by the editor in external mode via `std::env::current_exe()` + `engine-runner`.
 
 mod ipc;
 
@@ -13,9 +15,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-fn main() {
+pub fn run() {
     logging::init();
-    info!("engine-runner starting");
+    info!("engine-runner starting (unified editor binary)");
 
     let (ipc_tx, ipc_rx) = channel();
     if let Ok(port_s) = std::env::var("VGE_IPC_PORT") {

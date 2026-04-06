@@ -1,7 +1,7 @@
 Voxel game engine
 =================
 
-Rust + Vulkan workspace: custom ECS, chunked voxels, meshing, optional **editor** with IPC to **engine-runner**.
+Rust + Vulkan workspace: custom ECS, chunked voxels, meshing, optional **editor** with IPC to an **external engine host** (same binary: ``editor engine-runner``).
 
 .. toctree::
    :maxdepth: 2

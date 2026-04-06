@@ -55,7 +55,17 @@ impl GlutinWindowContext {
         use glutin::display::GlDisplay;
         use glutin::prelude::GlSurface;
 
+        #[cfg(target_os = "windows")]
         let mut winit_window_builder = winit::window::WindowAttributes::default()
+            .with_resizable(true)
+            .with_inner_size(LogicalSize {
+                width: 1200.0,
+                height: 780.0,
+            })
+            .with_title("Voxel Editor")
+            .with_visible(false);
+        #[cfg(not(target_os = "windows"))]
+        let winit_window_builder = winit::window::WindowAttributes::default()
             .with_resizable(true)
             .with_inner_size(LogicalSize {
                 width: 1200.0,

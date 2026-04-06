@@ -8,7 +8,7 @@ The ``scripting`` crate hosts **Lua 5.4** via ``mlua``. The engine calls into Lu
 Loading
 -------
 
-Set the environment variable **``VGE_LUA_SCRIPT``** to a ``.lua`` file path before starting **engine-runner** or the **embedded editor** (``VGE_EMBEDDED=1``). The file is executed once at startup; there is no hot reload in this MVP (the existing ``ScriptHotWatch`` helper remains available for future wiring).
+Set the environment variable **``VGE_LUA_SCRIPT``** to a ``.lua`` file path before starting **``editor engine-runner``** (external host) or the **embedded editor** (``VGE_EMBEDDED=1``). The file is executed once at startup; there is no hot reload in this MVP (the existing ``ScriptHotWatch`` helper remains available for future wiring).
 
 Global hooks
 ------------

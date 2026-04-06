@@ -33,7 +33,7 @@ Workspace Layout (Cargo)
 /crates engine-core ecs scene render-vulkan voxel meshing physics assets
 scripting api platform logging
 
-/apps editor engine-runner
+/apps editor (unified binary: `editor engine-runner` for external engine host)
 
 /shared protocol formats
 

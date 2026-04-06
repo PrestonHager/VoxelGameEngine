@@ -5,7 +5,7 @@ Editor (MVP)
 
 The **editor** authors **levels** (JSON), manages a **built-in prefab library**, and can run in two modes:
 
-* **External engine (default):** ``eframe`` + optional auto-launch of ``engine-runner``; **Push** uses ``shared/protocol`` (``LoadLevelFromPath``).
+* **External engine (default):** ``eframe`` + optional auto-launch of the same binary with the ``engine-runner`` subcommand; **Push** uses ``shared/protocol`` (``LoadLevelFromPath``).
 * **Embedded:** set ``VGE_EMBEDDED=1`` — same binary runs **egui** (OpenGL via glutin) and a second **Vulkan** window, parented to the editor on **Windows** and **X11** when the platform allows. **Push** applies the level **in-process** (no IPC).
 
 Launching
@@ -14,7 +14,7 @@ Launching
 **Requirements**
 
 - Same prerequisites as the main engine (Rust, Vulkan where applicable).
-- For **Push to engine**, ``engine-runner`` must be listening on the same IPC port as the editor.
+- For **Push to engine**, an **engine host** (``editor engine-runner``) must be listening on the same IPC port as the editor.
 
 **Environment**
 
@@ -27,7 +27,7 @@ Launching
    * - ``VGE_IPC_PORT``
      - TCP port for editor ↔ engine IPC (default in app: **7878** if unset).
    * - ``VGE_ENGINE_EXE``
-     - Optional full path to ``engine-runner`` if it is not next to the editor binary.
+     - Optional full path to the **editor** binary (or legacy standalone ``engine-runner``) when auto-spawn cannot use ``current_exe()``.
    * - ``VGE_EMBEDDED``
      - Set to ``1`` for in-process Vulkan **Engine view** (child window) + egui.
    * - ``VGE_LUA_SCRIPT``
@@ -40,7 +40,7 @@ From the repository root:
 .. code-block:: bash
 
    export VGE_IPC_PORT=7878   # Linux/macOS
-   cargo run -p engine-runner
+   cargo run -p editor -- engine-runner
 
 .. code-block:: bash
 
@@ -52,19 +52,14 @@ On Windows (PowerShell):
 .. code-block:: powershell
 
    $env:VGE_IPC_PORT = "7878"
-   cargo run -p engine-runner
+   cargo run -p editor -- engine-runner
 
 .. code-block:: powershell
 
    $env:VGE_IPC_PORT = "7878"
    cargo run -p editor
 
-Helper scripts (from repo root):
-
-* ``scripts/run-editor.ps1`` — sets ``VGE_IPC_PORT`` (default 7878) and runs ``cargo run -p editor`` (optional ``-Release``).
-* ``scripts/run-editor.sh`` — same for Unix shells; optional first argument ``--release``.
-
-If the editor starts **without** an engine on the port (non-embedded), it tries to spawn ``engine-runner`` from the same directory as ``editor`` (typical after ``cargo run``: ``target/debug``). Ensure ``engine-runner`` is built and appears beside ``editor``, or set ``VGE_ENGINE_EXE``.
+If the editor starts **without** an engine on the port (non-embedded), it tries to spawn **``editor engine-runner``** using the same executable (typical after ``cargo run``: ``target/debug/editor``). Set ``VGE_ENGINE_EXE`` if the host binary is not discoverable from ``current_exe()``.
 
 **Embedded launch**
 
@@ -99,13 +94,13 @@ Collapsible groups by category (**Primitive**, **Gameplay**, **Environment**, **
 Workflow
 --------
 
-1. Start **engine-runner** with ``VGE_IPC_PORT`` set (or let the editor spawn it).
+1. Start **``editor engine-runner``** with ``VGE_IPC_PORT`` set (or let the editor spawn it).
 2. Start **editor** with the **same** port.
 3. Add objects from the library; adjust transforms and terrain.
 4. **Save level** to e.g. ``demo_level.vge.json``.
 5. **Push to engine** to hot-reload that file in the running engine.
 
-**Note:** Push requires the file to exist on disk and be readable by **engine-runner** (same machine; path is canonicalized on the editor side). Network shares or different working directories may need an explicit absolute path in **Level file**.
+**Note:** Push requires the file to exist on disk and be readable by the **engine host** (same machine; path is canonicalized on the editor side). Network shares or different working directories may need an explicit absolute path in **Level file**.
 
 Level file format
 -----------------
