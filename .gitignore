@@ -6,6 +6,9 @@
 /.vscode
 *.spv.tmp
 
+# Documentation build
+/docs/_build
+
 # VGE files
 *.vge.json
 *.vge.json.gz

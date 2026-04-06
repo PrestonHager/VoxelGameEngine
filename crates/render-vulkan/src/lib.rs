@@ -4,7 +4,7 @@ use ash::khr::{surface, swapchain};
 use ash::vk;
 use ash::vk::Handle;
 use ash::{Device, Entry, Instance};
-use bytemuck::{cast_slice, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::ffi::CStr;
@@ -66,7 +66,7 @@ fn cube_vertices() -> (Vec<Vertex>, Vec<u32>) {
         })
         .collect();
     let idx: Vec<u32> = vec![
-        0, 1, 2, 2, 3, 0, // bottom
+        0, 2, 1, 2, 0, 3, // bottom (match outward winding for back-face culling)
         4, 5, 6, 6, 7, 4, // top
         0, 1, 5, 5, 4, 0, 1, 2, 6, 6, 5, 1, 2, 3, 7, 7, 6, 2, 3, 0, 4, 4, 7, 3,
     ];
@@ -1443,7 +1443,20 @@ fn create_buffer(
 }
 
 fn create_shader_module(device: &Device, code: &[u8]) -> Result<vk::ShaderModule, RenderError> {
-    let info = vk::ShaderModuleCreateInfo::default().code(cast_slice(code));
+    if code.len() % 4 != 0 {
+        return Err(RenderError::Msg(
+            "shader bytecode length must be a multiple of 4".into(),
+        ));
+    }
+
+    // SPIR-V is a u32 word stream. `include_bytes!` does not guarantee 4-byte alignment,
+    // so avoid `cast_slice` and decode into words explicitly.
+    let words: Vec<u32> = code
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+
+    let info = vk::ShaderModuleCreateInfo::default().code(&words);
     Ok(unsafe { device.create_shader_module(&info, None)? })
 }
 
