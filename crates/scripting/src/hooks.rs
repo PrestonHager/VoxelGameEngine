@@ -140,17 +140,17 @@ impl ScriptHost {
                     continue;
                 }
                 let instance_id = k as u64;
-                let api = create_api_table(
-                    &self.lua,
-                    w_raw,
-                    m_raw,
-                    instance_id,
+                let ctx = ApiContext {
+                    world_raw: w_raw,
+                    map_raw: m_raw,
+                    default_instance: instance_id,
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
-                    Arc::clone(&self.logs),
-                    Arc::clone(&self.cursor_commands),
-                )?;
+                    logs: Arc::clone(&self.logs),
+                    cursor_commands: Arc::clone(&self.cursor_commands),
+                };
+                let api = create_api_table(&self.lua, &ctx)?;
                 func.call::<()>((dt as f64, api))?;
             }
         }
@@ -164,17 +164,17 @@ impl ScriptHost {
                     Value::Number(n) if n >= 0.0 => n as u64,
                     _ => continue,
                 };
-                let api = create_api_table(
-                    &self.lua,
-                    w_raw,
-                    m_raw,
-                    instance_id,
+                let ctx = ApiContext {
+                    world_raw: w_raw,
+                    map_raw: m_raw,
+                    default_instance: instance_id,
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
-                    Arc::clone(&self.logs),
-                    Arc::clone(&self.cursor_commands),
-                )?;
+                    logs: Arc::clone(&self.logs),
+                    cursor_commands: Arc::clone(&self.cursor_commands),
+                };
+                let api = create_api_table(&self.lua, &ctx)?;
                 func.call::<()>((dt as f64, api))?;
             }
         }
@@ -233,8 +233,7 @@ fn harden_lua_env(lua: &Lua) {
     }
 }
 
-fn create_api_table(
-    lua: &Lua,
+struct ApiContext {
     world_raw: usize,
     map_raw: usize,
     default_instance: u64,
@@ -243,9 +242,22 @@ fn create_api_table(
     mouse_pos: Option<(f32, f32)>,
     logs: Arc<Mutex<Vec<String>>>,
     cursor_commands: Arc<Mutex<CursorCommands>>,
+}
+
+fn create_api_table(
+    lua: &Lua,
+    ctx: &ApiContext,
 ) -> mlua::Result<Table> {
     let t = lua.create_table()?;
-    t.set("default_instance", default_instance as mlua::Integer)?;
+    t.set("default_instance", ctx.default_instance as mlua::Integer)?;
+
+    let world_raw = ctx.world_raw;
+    let map_raw = ctx.map_raw;
+    let mouse_dx = ctx.mouse_dx;
+    let mouse_dy = ctx.mouse_dy;
+    let mouse_pos = ctx.mouse_pos;
+    let logs = Arc::clone(&ctx.logs);
+    let cursor_commands = Arc::clone(&ctx.cursor_commands);
 
     t.set(
         "log",
