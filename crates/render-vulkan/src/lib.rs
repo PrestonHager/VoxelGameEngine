@@ -100,6 +100,7 @@ pub struct VulkanRenderer {
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available: Vec<vk::Semaphore>,
+    /// One per swapchain image — avoids reusing a binary semaphore while present still holds it.
     render_finished: Vec<vk::Semaphore>,
     in_flight: Vec<vk::Fence>,
     current_frame: usize,
@@ -265,9 +266,9 @@ impl VulkanRenderer {
 
         r.create_swapchain(window)?;
         r.create_render_pass()?;
+        r.create_command_pool()?;
         r.create_depth_resources()?;
         r.create_framebuffers()?;
-        r.create_command_pool()?;
         r.load_mesh_and_pipeline()?;
         r.create_uniforms_and_descriptors()?;
         r.create_sync()?;
@@ -574,6 +575,33 @@ impl VulkanRenderer {
     }
 
     fn load_mesh_and_pipeline(&mut self) -> Result<(), RenderError> {
+        unsafe {
+            if !self.vertex_buffer.is_null() {
+                self.device.destroy_buffer(self.vertex_buffer, None);
+            }
+            if !self.vertex_mem.is_null() {
+                self.device.free_memory(self.vertex_mem, None);
+            }
+            if !self.index_buffer.is_null() {
+                self.device.destroy_buffer(self.index_buffer, None);
+            }
+            if !self.index_mem.is_null() {
+                self.device.free_memory(self.index_mem, None);
+            }
+            if !self.instance_buffer.is_null() {
+                self.device.destroy_buffer(self.instance_buffer, None);
+            }
+            if !self.instance_mem.is_null() {
+                self.device.free_memory(self.instance_mem, None);
+            }
+        }
+        self.vertex_buffer = vk::Buffer::null();
+        self.vertex_mem = vk::DeviceMemory::null();
+        self.index_buffer = vk::Buffer::null();
+        self.index_mem = vk::DeviceMemory::null();
+        self.instance_buffer = vk::Buffer::null();
+        self.instance_mem = vk::DeviceMemory::null();
+
         let (verts, idx) = cube_vertices();
         self.index_count = idx.len() as u32;
 
@@ -878,16 +906,27 @@ impl VulkanRenderer {
             unsafe {
                 self.image_available
                     .push(self.device.create_semaphore(&sem_info, None)?);
-                self.render_finished
-                    .push(self.device.create_semaphore(&sem_info, None)?);
                 self.in_flight
                     .push(self.device.create_fence(&fence_info, None)?);
+            }
+        }
+        for _ in 0..self.swapchain_images.len() {
+            unsafe {
+                self.render_finished
+                    .push(self.device.create_semaphore(&sem_info, None)?);
             }
         }
         Ok(())
     }
 
     fn allocate_command_buffers(&mut self) -> Result<(), RenderError> {
+        if !self.command_buffers.is_empty() {
+            unsafe {
+                self.device
+                    .free_command_buffers(self.command_pool, &self.command_buffers);
+            }
+            self.command_buffers.clear();
+        }
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -907,6 +946,7 @@ impl VulkanRenderer {
         self.load_mesh_and_pipeline()?;
         self.create_framebuffers()?;
         self.create_uniforms_and_descriptors()?;
+        self.create_sync()?;
         self.allocate_command_buffers()?;
         Ok(())
     }
@@ -938,6 +978,7 @@ impl VulkanRenderer {
             }
             Err(e) => return Err(e.into()),
         };
+        let image_index = image_index as usize;
 
         let inst_n = instance_positions.len().min(MAX_INSTANCES);
         let inst_bytes = inst_n * size_of::<[f32; 3]>();
@@ -994,7 +1035,7 @@ impl VulkanRenderer {
 
         let rp_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
-            .framebuffer(self.framebuffers[image_index as usize])
+            .framebuffer(self.framebuffers[image_index])
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D::default(),
                 extent: self.swapchain_extent,
@@ -1051,7 +1092,7 @@ impl VulkanRenderer {
             .wait_semaphores(slice::from_ref(&self.image_available[frame]))
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(slice::from_ref(&cmd))
-            .signal_semaphores(slice::from_ref(&self.render_finished[frame]));
+            .signal_semaphores(slice::from_ref(&self.render_finished[image_index]));
 
         self.device.queue_submit(
             self.graphics_queue,
@@ -1060,9 +1101,9 @@ impl VulkanRenderer {
         )?;
 
         let swapchains = [self.swapchain];
-        let indices = [image_index];
+        let indices = [image_index as u32];
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(slice::from_ref(&self.render_finished[frame]))
+            .wait_semaphores(slice::from_ref(&self.render_finished[image_index]))
             .swapchains(&swapchains)
             .image_indices(&indices);
 

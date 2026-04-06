@@ -12,3 +12,4 @@ path = "src/main.rs"
 protocol = { path = "../../shared/protocol" }
 logging = { path = "../../crates/logging" }
 tracing.workspace = true
+eframe = "0.30"
