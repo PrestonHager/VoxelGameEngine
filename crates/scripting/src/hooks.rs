@@ -238,10 +238,7 @@ struct ApiContext {
     cursor_commands: Arc<Mutex<CursorCommands>>,
 }
 
-fn create_api_table(
-    lua: &Lua,
-    ctx: &ApiContext,
-) -> mlua::Result<Table> {
+fn create_api_table(lua: &Lua, ctx: &ApiContext) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     t.set("default_instance", ctx.default_instance as mlua::Integer)?;
 
