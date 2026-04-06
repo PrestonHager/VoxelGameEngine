@@ -90,18 +90,14 @@ pub fn ensure_engine_running(port: u16) -> Result<Option<Child>, String> {
 }
 
 fn exchange(port: u16, msg: &EditorToEngine) -> Result<String, String> {
-    let mut stream =
-        TcpStream::connect_timeout(&ipc_addr(port), Duration::from_secs(2)).map_err(|e| {
-            format!("connect {}: {e}", ipc_addr(port))
-        })?;
+    let mut stream = TcpStream::connect_timeout(&ipc_addr(port), Duration::from_secs(2))
+        .map_err(|e| format!("connect {}: {e}", ipc_addr(port)))?;
     let bytes = encode_editor_message(msg).map_err(|e| e.to_string())?;
     stream
         .write_all(&bytes)
         .map_err(|e| format!("write: {e}"))?;
     let mut buf = vec![0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .map_err(|e| format!("read: {e}"))?;
+    let n = stream.read(&mut buf).map_err(|e| format!("read: {e}"))?;
     let reply = decode_engine_message(&buf[..n]).map_err(|e| e.to_string())?;
     Ok(format!("{reply:?}"))
 }

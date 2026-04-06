@@ -19,7 +19,9 @@ fn main() -> eframe::Result {
         .unwrap_or(7878);
 
     if config::embedded_mode_requested() {
-        tracing::info!("starting embedded editor (use --embedded or VGE_EMBEDDED=1; see config.rs docs)");
+        tracing::info!(
+            "starting embedded editor (use --embedded or VGE_EMBEDDED=1; see config.rs docs)"
+        );
         if let Err(e) = embedded::run_embedded(port) {
             eprintln!("embedded editor failed: {e}");
             std::process::exit(1);

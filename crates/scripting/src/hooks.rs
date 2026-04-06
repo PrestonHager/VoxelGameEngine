@@ -17,19 +17,14 @@ impl ScriptHost {
     pub fn from_file(path: &Path) -> Result<Self, ScriptError> {
         let lua = Lua::new();
         let src = std::fs::read_to_string(path)?;
-        lua.load(src)
-            .set_name(path.display().to_string())
-            .exec()?;
+        lua.load(src).set_name(path.display().to_string()).exec()?;
         Ok(Self { lua })
     }
 
     /// Build VM when `VGE_LUA_SCRIPT` is set and/or the level assigns script assets to objects.
     pub fn from_level(level: &Level) -> Option<Self> {
         let env_script = std::env::var("VGE_LUA_SCRIPT").ok();
-        let has_entity_scripts = level
-            .objects
-            .iter()
-            .any(|o| o.script_asset_id.is_some());
+        let has_entity_scripts = level.objects.iter().any(|o| o.script_asset_id.is_some());
         if env_script.is_none() && !has_entity_scripts {
             return None;
         }
@@ -60,7 +55,11 @@ impl ScriptHost {
                 continue;
             };
             let Some(path) = level.resolve_script_asset_path(aid) else {
-                tracing::warn!(target = "script", "no script asset {aid} for instance {}", o.instance_id);
+                tracing::warn!(
+                    target = "script",
+                    "no script asset {aid} for instance {}",
+                    o.instance_id
+                );
                 continue;
             };
             let src = match std::fs::read_to_string(&path) {
@@ -70,11 +69,7 @@ impl ScriptHost {
                     continue;
                 }
             };
-            let f: Function = match lua
-                .load(src)
-                .set_name(path.display().to_string())
-                .eval()
-            {
+            let f: Function = match lua.load(src).set_name(path.display().to_string()).eval() {
                 Ok(f) => f,
                 Err(e) => {
                     tracing::warn!(target = "script", "{}: {e}", path.display());
@@ -177,30 +172,26 @@ fn create_api_table(
 
     t.set(
         "set_position",
-        lua.create_function(
-            move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
-                let world = unsafe { &mut *(world_raw as *mut World) };
-                let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
-                let Some(e) = map.get(&instance_id) else {
-                    return Ok(false);
-                };
-                Ok(world.set_position(*e, Position(Vec3::new(x, y, z))))
-            },
-        )?,
+        lua.create_function(move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(false);
+            };
+            Ok(world.set_position(*e, Position(Vec3::new(x, y, z))))
+        })?,
     )?;
 
     t.set(
         "set_velocity",
-        lua.create_function(
-            move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
-                let world = unsafe { &mut *(world_raw as *mut World) };
-                let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
-                let Some(e) = map.get(&instance_id) else {
-                    return Ok(false);
-                };
-                Ok(world.set_velocity(*e, Velocity(Vec3::new(x, y, z))))
-            },
-        )?,
+        lua.create_function(move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(false);
+            };
+            Ok(world.set_velocity(*e, Velocity(Vec3::new(x, y, z))))
+        })?,
     )?;
 
     Ok(t)
@@ -220,9 +211,7 @@ fn tick_runs_in_memory_entity_script() {
         .expect("chunk returns function");
     let tbl = lua.create_table().expect("table");
     tbl.set(42i64, f).expect("set hook");
-    lua.globals()
-        .set("_entity_scripts", tbl)
-        .expect("globals");
+    lua.globals().set("_entity_scripts", tbl).expect("globals");
     let host = ScriptHost { lua };
     let mut world = World::default();
     let map = HashMap::new();

@@ -115,11 +115,7 @@ impl World {
         }
     }
 
-    fn finalize_entity_meta(
-        &mut self,
-        index: usize,
-        reused: bool,
-    ) -> Entity {
+    fn finalize_entity_meta(&mut self, index: usize, reused: bool) -> Entity {
         let meta = &mut self.entities[index];
         if reused {
             meta.generation = meta.generation.wrapping_add(1);
@@ -236,11 +232,7 @@ impl World {
         }
     }
 
-    fn remove_row_prefab(
-        arch: &mut ArchetypePosPrefab,
-        row: usize,
-        all_meta: &mut [EntityMeta],
-    ) {
+    fn remove_row_prefab(arch: &mut ArchetypePosPrefab, row: usize, all_meta: &mut [EntityMeta]) {
         let last = arch.entities.len() - 1;
         if row > last {
             return;
@@ -260,11 +252,7 @@ impl World {
         }
     }
 
-    fn remove_row_camera(
-        arch: &mut ArchetypePosCamera,
-        row: usize,
-        all_meta: &mut [EntityMeta],
-    ) {
+    fn remove_row_camera(arch: &mut ArchetypePosCamera, row: usize, all_meta: &mut [EntityMeta]) {
         let last = arch.entities.len() - 1;
         if row > last {
             return;

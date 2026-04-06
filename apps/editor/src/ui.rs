@@ -3,7 +3,7 @@
 use crate::launcher;
 use crate::model::{EditorMainTab, EditorModel};
 use eframe::egui;
-use eframe::egui::{menu, Button, Color32, KeyboardShortcut, Key, Modifiers, Sense, Stroke};
+use eframe::egui::{menu, Button, Color32, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
 use tracing::debug;
@@ -37,7 +37,11 @@ fn handle_menu_shortcuts(ctx: &egui::Context, model: &mut EditorModel) {
     }
 }
 
-pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Option<&mut EngineState>) {
+pub fn draw_editor_ui(
+    ctx: &egui::Context,
+    model: &mut EditorModel,
+    embedded: Option<&mut EngineState>,
+) {
     if embedded.is_none() {
         model.engine_viewport_px = None;
         model.bootstrap_external();
@@ -51,18 +55,14 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
         menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui
-                    .add(
-                        Button::new("Open…").shortcut_text(ctx.format_shortcut(&kb_open())),
-                    )
+                    .add(Button::new("Open…").shortcut_text(ctx.format_shortcut(&kb_open())))
                     .clicked()
                 {
                     model.open_level_dialog();
                     ui.close_menu();
                 }
                 if ui
-                    .add(
-                        Button::new("Save").shortcut_text(ctx.format_shortcut(&kb_save())),
-                    )
+                    .add(Button::new("Save").shortcut_text(ctx.format_shortcut(&kb_save())))
                     .clicked()
                 {
                     if let Err(e) = model.save_level_file() {
@@ -74,10 +74,7 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
                     ui.close_menu();
                 }
                 if ui
-                    .add(
-                        Button::new("Save As…")
-                            .shortcut_text(ctx.format_shortcut(&kb_save_as())),
-                    )
+                    .add(Button::new("Save As…").shortcut_text(ctx.format_shortcut(&kb_save_as())))
                     .clicked()
                 {
                     model.save_level_as_dialog();
@@ -88,7 +85,11 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
                 ui.add_enabled(false, Button::new("Undo"));
                 ui.add_enabled(false, Button::new("Redo"));
                 ui.separator();
-                ui.label(egui::RichText::new("Undo / redo — coming later").small().weak());
+                ui.label(
+                    egui::RichText::new("Undo / redo — coming later")
+                        .small()
+                        .weak(),
+                );
             });
         });
     });
@@ -149,15 +150,17 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
             ui.heading("Scene");
             ui.label("Placed objects");
             ui.separator();
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                for o in &model.level.objects {
-                    let sel = model.selected_instance == Some(o.instance_id);
-                    let label = format!("{} (#{})", o.name, o.instance_id);
-                    if ui.selectable_label(sel, label).clicked() {
-                        model.selected_instance = Some(o.instance_id);
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    for o in &model.level.objects {
+                        let sel = model.selected_instance == Some(o.instance_id);
+                        let label = format!("{} (#{})", o.name, o.instance_id);
+                        if ui.selectable_label(sel, label).clicked() {
+                            model.selected_instance = Some(o.instance_id);
+                        }
                     }
-                }
-            });
+                });
             if ui.button("Delete selected").clicked() {
                 if let Some(id) = model.selected_instance {
                     model.level.objects.retain(|o| o.instance_id != id);
@@ -167,12 +170,7 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
             }
 
             if let Some(id) = model.selected_instance {
-                if let Some(o) = model
-                    .level
-                    .objects
-                    .iter_mut()
-                    .find(|o| o.instance_id == id)
-                {
+                if let Some(o) = model.level.objects.iter_mut().find(|o| o.instance_id == id) {
                     ui.separator();
                     ui.label(format!("Edit #{}", id));
                     ui.horizontal(|ui| {
@@ -226,7 +224,11 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
                         let cam = o.camera.get_or_insert_with(Default::default);
                         ui.separator();
                         ui.label("Camera rig");
-                        ui.add(egui::DragValue::new(&mut cam.fov_deg).speed(1.0).prefix("fov ° "));
+                        ui.add(
+                            egui::DragValue::new(&mut cam.fov_deg)
+                                .speed(1.0)
+                                .prefix("fov ° "),
+                        );
                         ui.horizontal(|ui| {
                             ui.label("yaw °");
                             ui.add(egui::DragValue::new(&mut cam.yaw_deg).speed(0.5));
@@ -243,47 +245,47 @@ pub fn draw_editor_ui(ctx: &egui::Context, model: &mut EditorModel, embedded: Op
                 ui.label(format!("Mode: {:?}", TerrainMode::Flat));
                 ui.horizontal(|ui| {
                     ui.label("surface material");
-                    ui.add(egui::DragValue::new(&mut model.level.terrain.surface_material).speed(1.0));
+                    ui.add(
+                        egui::DragValue::new(&mut model.level.terrain.surface_material).speed(1.0),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("base height (voxels)");
                     ui.add(
-                        egui::DragValue::new(&mut model.level.terrain.base_height_voxels).speed(1.0),
+                        egui::DragValue::new(&mut model.level.terrain.base_height_voxels)
+                            .speed(1.0),
                     );
                 });
             });
         });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        match model.main_tab {
-            EditorMainTab::Level => {
-                draw_level_tab(ui, model, embedded);
-            }
-            EditorMainTab::Assets => {
-                if embedded.is_some() {
-                    if model.engine_viewport_px.is_some() {
-                        debug!(
-                            target: "vge_embedded",
-                            "clearing engine_viewport_px (Assets tab hides embedded 3D view)"
-                        );
-                    }
-                    model.engine_viewport_px = None;
+    egui::CentralPanel::default().show(ctx, |ui| match model.main_tab {
+        EditorMainTab::Level => {
+            draw_level_tab(ui, model, embedded);
+        }
+        EditorMainTab::Assets => {
+            if embedded.is_some() {
+                if model.engine_viewport_px.is_some() {
+                    debug!(
+                        target: "vge_embedded",
+                        "clearing engine_viewport_px (Assets tab hides embedded 3D view)"
+                    );
                 }
-                draw_assets_tab(ui, model);
+                model.engine_viewport_px = None;
             }
+            draw_assets_tab(ui, model);
         }
     });
 }
 
-fn draw_level_tab(
-    ui: &mut egui::Ui,
-    model: &mut EditorModel,
-    embedded: Option<&mut EngineState>,
-) {
+fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&mut EngineState>) {
     let is_embedded = embedded.is_some();
     ui.heading("Voxel Editor");
     if !is_embedded {
-        ui.label(format!("IPC port: {} (set VGE_IPC_PORT to change)", model.port));
+        ui.label(format!(
+            "IPC port: {} (set VGE_IPC_PORT to change)",
+            model.port
+        ));
         ui.label(egui::RichText::new(
             "External engine: Play pushes the saved level to engine-runner over IPC. Use File for Open / Save.",
         )
@@ -367,11 +369,8 @@ fn draw_level_tab(
         let rect = response.rect;
         // Stroke only: avoid painting an opaque egui layer over the same pixels as the child
         // Vulkan HWND (reduces parent/child "ghost" smear on Windows).
-        ui.painter().rect_stroke(
-            rect,
-            3.0,
-            Stroke::new(1.0, Color32::from_rgb(60, 60, 68)),
-        );
+        ui.painter()
+            .rect_stroke(rect, 3.0, Stroke::new(1.0, Color32::from_rgb(60, 60, 68)));
         let px = (
             (rect.min.x * ppp).round() as i32,
             (rect.min.y * ppp).round() as i32,

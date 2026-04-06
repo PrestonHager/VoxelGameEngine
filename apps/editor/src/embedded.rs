@@ -85,9 +85,9 @@ impl GlutinWindowContext {
                 event_loop,
                 config_template_builder,
                 |mut config_iterator| {
-                    config_iterator
-                        .next()
-                        .expect("failed to find a matching configuration for creating glutin config")
+                    config_iterator.next().expect(
+                        "failed to find a matching configuration for creating glutin config",
+                    )
                 },
             )
             .expect("failed to create gl_config");
@@ -288,9 +288,11 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
 
         let egui_glow = egui_glow::winit::EguiGlow::new(event_loop, gl.clone(), None, None, true);
         let proxy = self.proxy.clone();
-        egui_glow.egui_ctx.set_request_repaint_callback(move |info| {
-            let _ = proxy.send_event(UserEvent::Redraw(info.delay));
-        });
+        egui_glow
+            .egui_ctx
+            .set_request_repaint_callback(move |info| {
+                let _ = proxy.send_event(UserEvent::Redraw(info.delay));
+            });
 
         let engine_base = WindowAttributes::default()
             .with_title("Engine view (embedded)")
@@ -352,9 +354,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                                     "Windows fallback: engine window with owner (not WS_CHILD)"
                                 );
                             }
-                            let w = event_loop
-                                .create_window(fb)
-                                .expect("engine window");
+                            let w = event_loop.create_window(fb).expect("engine window");
                             info!(
                                 target: "vge_embedded",
                                 engine_inner = ?w.inner_size(),
@@ -412,7 +412,9 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
 
         let mut model = EditorModel::new(self.port);
         crate::editor_state::apply_loaded_session(&mut model);
-        model.push_log("Embedded editor: use Play or File to run; the 3D view follows the central viewport.");
+        model.push_log(
+            "Embedded editor: use Play or File to run; the 3D view follows the central viewport.",
+        );
 
         self.inner = Some(Inner {
             gl_win,
@@ -569,9 +571,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 event_loop.set_control_flow(if inner.repaint_delay.is_zero() {
                     inner.gl_win.window().request_redraw();
                     ControlFlow::Poll
-                } else if let Some(t) =
-                    std::time::Instant::now().checked_add(inner.repaint_delay)
-                {
+                } else if let Some(t) = std::time::Instant::now().checked_add(inner.repaint_delay) {
                     ControlFlow::WaitUntil(t)
                 } else {
                     ControlFlow::Wait

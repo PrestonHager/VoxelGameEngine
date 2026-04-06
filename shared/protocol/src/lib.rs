@@ -189,7 +189,10 @@ mod tests {
     fn truncated_payload() {
         let mut b = encode_editor_message(&EditorToEngine::Ping { nonce: 3 }).unwrap();
         b.truncate(b.len() - 1);
-        assert!(matches!(decode_editor_message(&b), Err(ProtocolError::Truncated)));
+        assert!(matches!(
+            decode_editor_message(&b),
+            Err(ProtocolError::Truncated)
+        ));
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Background TCP listener for editor IPC (versioned `protocol` frames).
 
 use protocol::{
-    decode_editor_message, encode_engine_message, EditorToEngine, EngineToEditor, MAX_IPC_FRAME_BYTES,
+    decode_editor_message, encode_engine_message, EditorToEngine, EngineToEditor,
+    MAX_IPC_FRAME_BYTES,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;

@@ -6,16 +6,7 @@ use std::process::Child;
 use tracing::info;
 use uuid::Uuid;
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EditorMainTab {
     #[default]
@@ -153,7 +144,8 @@ impl EditorModel {
             let kind = Self::asset_kind_from_path(&p)?;
             if kind == AssetKind::Vox {
                 let bytes = std::fs::read(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
-                dot_vox::load_bytes(&bytes).map_err(|e| format!("{}: invalid MagicaVoxel .vox: {e}", p.display()))?;
+                dot_vox::load_bytes(&bytes)
+                    .map_err(|e| format!("{}: invalid MagicaVoxel .vox: {e}", p.display()))?;
             }
             let abs = p
                 .canonicalize()
@@ -224,7 +216,9 @@ impl EditorModel {
             target: "vge_embedded",
             "bootstrap_embedded: UI will drive engine_viewport_px on Level tab"
         );
-        self.push_log("Embedded mode: Vulkan view is a child of the editor window when the OS allows it.");
+        self.push_log(
+            "Embedded mode: Vulkan view is a child of the editor window when the OS allows it.",
+        );
     }
 
     pub fn add_placed(&mut self, prefab_id: u32, base_name: &str) {

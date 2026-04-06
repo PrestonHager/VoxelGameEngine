@@ -66,7 +66,10 @@ pub fn apply_loaded_session(model: &mut EditorModel) {
         Ok(Some(s)) => s,
         Ok(None) => return,
         Err(e) => {
-            warn!(target = "editor_state", "failed to load editor session: {e}");
+            warn!(
+                target = "editor_state",
+                "failed to load editor session: {e}"
+            );
             model.push_log(format!("Could not load editor session: {e}"));
             return;
         }
