@@ -1,0 +1,14 @@
+[package]
+name = "editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "editor"
+path = "src/main.rs"
+
+[dependencies]
+protocol = { path = "../../shared/protocol" }
+logging = { path = "../../crates/logging" }
+tracing.workspace = true

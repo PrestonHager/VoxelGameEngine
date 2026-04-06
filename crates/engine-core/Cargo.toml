@@ -1,0 +1,14 @@
+[package]
+name = "engine-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ecs = { path = "../ecs" }
+voxel = { path = "../voxel" }
+meshing = { path = "../meshing" }
+physics = { path = "../physics" }
+logging = { path = "../logging" }
+glam.workspace = true
+tracing.workspace = true

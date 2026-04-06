@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine-core",
+    "crates/ecs",
+    "crates/render-vulkan",
+    "crates/voxel",
+    "crates/meshing",
+    "crates/physics",
+    "crates/assets",
+    "crates/scripting",
+    "crates/api",
+    "crates/platform",
+    "crates/logging",
+    "apps/engine-runner",
+    "apps/editor",
+    "shared/protocol",
+    "shared/formats",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/voxel-game-engine"
+
+[workspace.dependencies]
+ash = "0.38"
+ash-window = "0.13"
+winit = "0.30"
+raw-window-handle = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+bytemuck = { version = "1.16", features = ["derive"] }
+glam = "0.29"
+naga = { version = "23", features = ["wgsl-in", "spv-out"] }
+mlua = { version = "0.10", features = ["lua54", "send", "vendored"] }
+notify = "7"
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+rapier3d = "0.21"
+crossbeam-channel = "0.5"

@@ -1,0 +1,11 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stable C ABI surface for native plugins (unsafe boundary documented at exports)."
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]

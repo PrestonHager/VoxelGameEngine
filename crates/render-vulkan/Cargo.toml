@@ -1,0 +1,19 @@
+[package]
+name = "render-vulkan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+ash.workspace = true
+ash-window.workspace = true
+raw-window-handle.workspace = true
+winit.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+
+[build-dependencies]
+naga.workspace = true
