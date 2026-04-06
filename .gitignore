@@ -14,6 +14,7 @@
 *.vge.json.gz
 *.vge
 
+*.zip
 # VGE project workspaces (folders that contain a .vge project file)
 # Add one entry per project root folder.
 Demo Project/

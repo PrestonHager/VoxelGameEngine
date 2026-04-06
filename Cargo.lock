@@ -186,7 +186,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "approx"
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "crossbeam-channel",
  "notify",
@@ -1048,14 +1048,14 @@ dependencies = [
 
 [[package]]
 name = "ecs"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "glam",
 ]
 
 [[package]]
 name = "editor"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ash",
  "dirs",
@@ -1064,6 +1064,7 @@ dependencies = [
  "egui-winit",
  "egui_glow",
  "engine-core",
+ "glam",
  "glow 0.16.0",
  "glutin",
  "glutin-winit",
@@ -1213,8 +1214,9 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
+ "dot_vox",
  "ecs",
  "glam",
  "logging",
@@ -1412,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "formats"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
 ]
@@ -2127,7 +2129,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "logging"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -2206,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "meshing"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "glam",
  "voxel",
@@ -2919,7 +2921,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "physics"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "rapier3d",
 ]
@@ -2975,7 +2977,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "raw-window-handle",
  "winit",
@@ -3068,7 +3070,7 @@ checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 
 [[package]]
 name = "protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bincode",
  "serde",
@@ -3284,7 +3286,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "render-vulkan"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ash",
  "ash-window",
@@ -3406,7 +3408,7 @@ dependencies = [
 
 [[package]]
 name = "scene"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bincode",
  "serde",
@@ -3429,7 +3431,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scripting"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ecs",
  "glam",
@@ -4043,7 +4045,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voxel"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "glam",
 ]

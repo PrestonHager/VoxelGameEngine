@@ -61,6 +61,8 @@ impl eframe::App for PreferencesApp {
                 &mut self.prefs.show_fps_overlay,
                 "Show FPS overlay in embedded viewport",
             );
+            ui.checkbox(&mut self.prefs.invert_orbit_x, "Invert model preview orbit X");
+            ui.checkbox(&mut self.prefs.invert_orbit_y, "Invert model preview orbit Y");
             ui.horizontal(|ui| {
                 ui.label("FPS overlay corner");
                 egui::ComboBox::from_id_salt("prefs_fps_corner")
