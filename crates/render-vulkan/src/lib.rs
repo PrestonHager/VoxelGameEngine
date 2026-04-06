@@ -1096,11 +1096,7 @@ impl VulkanRenderer {
                 inst_bytes as u64,
                 vk::MemoryMapFlags::empty(),
             )?;
-            std::ptr::copy_nonoverlapping(
-                instance_data.as_ptr(),
-                ptr as *mut [f32; 6],
-                inst_n,
-            );
+            std::ptr::copy_nonoverlapping(instance_data.as_ptr(), ptr as *mut [f32; 6], inst_n);
             self.device.unmap_memory(self.instance_mem);
         }
 

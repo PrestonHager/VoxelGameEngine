@@ -309,7 +309,8 @@ impl EditorModel {
         let abs = scene::resolve_project_path(&root, &rel_file)
             .map_err(|e| format!("file path invalid: {e}"))?;
         if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
         if !abs.exists() {
             std::fs::write(&abs, "").map_err(|e| format!("create {}: {e}", abs.display()))?;
@@ -588,7 +589,8 @@ impl EditorModel {
             .map_err(|e| format!("serialize: {e}"))?;
         let level_path = self.resolve_level_path_for_io()?;
         if let Some(parent) = level_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
         std::fs::write(&level_path, json)
             .map_err(|e| format!("write {}: {e}", level_path.display()))?;
@@ -625,7 +627,9 @@ impl EditorModel {
             project.name = "Project".into();
         }
         if let Some(root) = self.project_root_dir() {
-            if let Ok(rel) = scene::make_project_relative_path(&root, &self.resolve_level_path_for_io()?) {
+            if let Ok(rel) =
+                scene::make_project_relative_path(&root, &self.resolve_level_path_for_io()?)
+            {
                 project.default_level = Some(rel);
             }
         }
@@ -754,7 +758,9 @@ impl EditorModel {
     fn update_project_default_level_from_model(&mut self) {
         let root = self.project_root_dir();
         let level_abs = self.resolve_level_path_for_io();
-        if let (Some(project), Some(root), Ok(level_abs)) = (self.current_project.as_mut(), root, level_abs) {
+        if let (Some(project), Some(root), Ok(level_abs)) =
+            (self.current_project.as_mut(), root, level_abs)
+        {
             if let Ok(rel) = scene::make_project_relative_path(&root, &level_abs) {
                 project.default_level = Some(rel);
             }

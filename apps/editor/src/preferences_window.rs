@@ -154,4 +154,3 @@ impl eframe::App for PreferencesApp {
         let _ = editor_state::save_preferences(&self.prefs);
     }
 }
-

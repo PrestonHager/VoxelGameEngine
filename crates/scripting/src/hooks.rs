@@ -219,13 +219,7 @@ impl ScriptHost {
 fn harden_lua_env(lua: &Lua) {
     let globals = lua.globals();
     for name in [
-        "os",
-        "io",
-        "package",
-        "debug",
-        "dofile",
-        "loadfile",
-        "require",
+        "os", "io", "package", "debug", "dofile", "loadfile", "require",
     ] {
         if let Err(e) = globals.set(name, Value::Nil) {
             tracing::warn!(target = "script", "sandbox disable {name}: {e}");
@@ -276,7 +270,7 @@ fn create_api_table(
             Ok(Value::Table(out))
         })?,
     )?;
-    
+
     t.set(
         "get_rotation",
         lua.create_function(move |lua, instance_id: u64| {
@@ -297,14 +291,16 @@ fn create_api_table(
     )?;
     t.set(
         "set_rotation",
-        lua.create_function(move |_, (instance_id, pitch, yaw, roll): (u64, f32, f32, f32)| {
-            let world = unsafe { &mut *(world_raw as *mut World) };
-            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
-            let Some(e) = map.get(&instance_id) else {
-                return Ok(false);
-            };
-            Ok(world.set_rotation(*e, Rotation(Vec3::new(pitch, yaw, roll))))
-        })?,
+        lua.create_function(
+            move |_, (instance_id, pitch, yaw, roll): (u64, f32, f32, f32)| {
+                let world = unsafe { &mut *(world_raw as *mut World) };
+                let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+                let Some(e) = map.get(&instance_id) else {
+                    return Ok(false);
+                };
+                Ok(world.set_rotation(*e, Rotation(Vec3::new(pitch, yaw, roll))))
+            },
+        )?,
     )?;
 
     t.set(
@@ -435,7 +431,9 @@ fn harden_lua_env_disables_dangerous_globals() {
     let lua = Lua::new();
     harden_lua_env(&lua);
     let globals = lua.globals();
-    for name in ["os", "io", "package", "debug", "dofile", "loadfile", "require"] {
+    for name in [
+        "os", "io", "package", "debug", "dofile", "loadfile", "require",
+    ] {
         let v: Value = globals.get(name).expect("global read");
         assert!(matches!(v, Value::Nil), "{name} should be nil");
     }
