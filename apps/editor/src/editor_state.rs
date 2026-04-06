@@ -4,7 +4,7 @@
 //! - **macOS:** `~/Library/Application Support/VoxelGameEngine/editor_state.json`.
 //! - **Windows:** `%APPDATA%\VoxelGameEngine\editor_state.json`.
 
-use crate::model::{EditorMainTab, EditorModel};
+use crate::model::{EditorMainTab, EditorModel, EditorPreferences};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
@@ -22,6 +22,8 @@ pub struct EditorSessionState {
     pub level_path: String,
     #[serde(default)]
     pub project_file_path: String,
+    #[serde(default)]
+    pub preferences: EditorPreferences,
     pub main_tab: EditorMainTab,
 }
 
@@ -84,6 +86,8 @@ pub fn apply_loaded_session(model: &mut EditorModel) {
     }
 
     model.main_tab = s.main_tab;
+    model.preferences = s.preferences;
+    model.external_editor_candidates = EditorModel::discover_external_editor_candidates();
     model.project_file_path = s.project_file_path.trim().to_string();
     if !model.project_file_path.is_empty() {
         if let Err(e) = model.load_project_file() {
@@ -126,8 +130,60 @@ pub fn save_from_model(model: &EditorModel) -> io::Result<()> {
         format_version: FORMAT_VERSION,
         level_path: model.level_path.clone(),
         project_file_path: model.project_file_path.clone(),
+        // Preserve latest preferences from disk so a concurrently opened
+        // preferences window is not overwritten on editor exit.
+        preferences: load_startup_preferences(),
         main_tab: model.main_tab,
     };
+    let json = serde_json::to_string_pretty(&state)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let tmp_path = path.with_extension("json.tmp");
+    let mut f = fs::File::create(&tmp_path)?;
+    f.write_all(json.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    fs::rename(&tmp_path, &path)?;
+    Ok(())
+}
+
+pub fn load_startup_preferences() -> EditorPreferences {
+    match load() {
+        Ok(Some(s)) => s.preferences,
+        _ => EditorPreferences::default(),
+    }
+}
+
+pub fn save_preferences(prefs: &EditorPreferences) -> io::Result<()> {
+    let path = state_file_path().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "no user config directory (dirs::config_dir returned None)",
+        )
+    })?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut state = match load() {
+        Ok(Some(s)) => s,
+        Ok(None) => EditorSessionState {
+            format_version: FORMAT_VERSION,
+            level_path: String::new(),
+            project_file_path: String::new(),
+            preferences: EditorPreferences::default(),
+            main_tab: EditorMainTab::Level,
+        },
+        Err(EditorStateError::Io(e)) => return Err(e),
+        Err(EditorStateError::Json(_)) => EditorSessionState {
+            format_version: FORMAT_VERSION,
+            level_path: String::new(),
+            project_file_path: String::new(),
+            preferences: EditorPreferences::default(),
+            main_tab: EditorMainTab::Level,
+        },
+    };
+    state.preferences = prefs.clone();
     let json = serde_json::to_string_pretty(&state)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
@@ -150,6 +206,11 @@ mod tests {
             format_version: FORMAT_VERSION,
             level_path: "C:\\proj\\level.json".into(),
             project_file_path: "C:\\proj\\project.vge".into(),
+            preferences: EditorPreferences {
+                embedded_by_default: false,
+                external_editor_path: "C:\\Editor\\Code.exe".into(),
+                use_internal_editor_by_default: false,
+            },
             main_tab: EditorMainTab::Level,
         };
         let json = serde_json::to_string_pretty(&s).unwrap();
@@ -157,6 +218,12 @@ mod tests {
         assert_eq!(back.format_version, s.format_version);
         assert_eq!(back.level_path, s.level_path);
         assert_eq!(back.project_file_path, s.project_file_path);
+        assert!(!back.preferences.embedded_by_default);
+        assert_eq!(
+            back.preferences.external_editor_path,
+            "C:\\Editor\\Code.exe"
+        );
+        assert!(!back.preferences.use_internal_editor_by_default);
         assert_eq!(back.main_tab, s.main_tab);
     }
 
@@ -166,6 +233,11 @@ mod tests {
             "format_version": 999,
             "level_path": "",
             "project_file_path": "",
+            "preferences": {
+                "embedded_by_default": true,
+                "external_editor_path": "",
+                "use_internal_editor_by_default": true
+            },
             "main_tab": "level"
         });
         let s: EditorSessionState = serde_json::from_value(v).unwrap();

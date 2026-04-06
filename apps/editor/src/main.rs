@@ -6,6 +6,7 @@ mod embedded;
 mod engine_runner;
 mod launcher;
 mod model;
+mod preferences_window;
 mod ui;
 
 use eframe::egui;
@@ -18,14 +19,19 @@ fn main() -> eframe::Result {
         engine_runner::run();
         return Ok(());
     }
+    if args.len() >= 2 && args[1] == "preferences" {
+        logging::init();
+        return preferences_window::run();
+    }
 
     logging::init();
+    let prefs = editor_state::load_startup_preferences();
     let port: u16 = std::env::var("VGE_IPC_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(7878);
 
-    if config::embedded_mode_requested() {
+    if config::embedded_mode_requested(prefs.embedded_by_default) {
         tracing::info!(
             "starting embedded editor (default mode; pass --no-embedded for separate engine window)"
         );

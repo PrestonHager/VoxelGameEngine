@@ -6,6 +6,7 @@ use eframe::egui;
 use eframe::egui::{menu, Button, Color32, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
 use engine_core::EngineState;
 use scene::{ids, AssetKind, PrefabCategory, PrefabLibrary, TerrainMode};
+use std::path::Path;
 use tracing::debug;
 
 fn kb_open() -> KeyboardShortcut {
@@ -75,6 +76,10 @@ pub fn draw_editor_ui(
                     model.save_project_as_dialog();
                     ui.close_menu();
                 }
+                if ui.button("Preferences…").clicked() {
+                    model.open_preferences_window();
+                    ui.close_menu();
+                }
                 ui.separator();
                 if ui
                     .add(Button::new("Open…").shortcut_text(ctx.format_shortcut(&kb_open())))
@@ -104,6 +109,11 @@ pub fn draw_editor_ui(
                 }
             });
             ui.menu_button("Edit", |ui| {
+                if ui.button("Preferences…").clicked() {
+                    model.open_preferences_window();
+                    ui.close_menu();
+                }
+                ui.separator();
                 ui.add_enabled(false, Button::new("Undo"));
                 ui.add_enabled(false, Button::new("Redo"));
                 ui.separator();
@@ -298,6 +308,8 @@ pub fn draw_editor_ui(
             draw_assets_tab(ui, model);
         }
     });
+
+    draw_code_editor_window(ctx, model);
 }
 
 fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&mut EngineState>) {
@@ -430,27 +442,77 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
 }
 
 fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
-    ui.heading("Asset manager");
-    ui.label(egui::RichText::new(
-        "Import level JSON, MagicaVoxel .vox models, or Lua .lua scripts. Paths are stored in the level file/project file (project-relative when a .vge project is active). \
-         Assign a script to an object from the Scene panel (Lua chunk must return function(dt, api) … end).",
-    )
-    .weak());
+    ui.heading("Assets / Project files");
+    ui.label(
+        egui::RichText::new(
+            "Browse the current project folder tree. Open files in the in-editor code editor or external editor based on Preferences.",
+        )
+        .weak(),
+    );
     ui.separator();
 
-    if ui.button("Import files…").clicked() {
-        if let Some(paths) = rfd::FileDialog::new().pick_files() {
-            if let Err(e) = model.import_asset_paths(paths) {
+    let Some(project_root) = model.project_root_dir() else {
+        ui.label(egui::RichText::new("Open or create a project to browse files.").weak());
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        if ui.button("Import files…").clicked() {
+            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                if let Err(e) = model.import_asset_paths(paths) {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                } else {
+                    model.status.clear();
+                }
+            }
+        }
+        ui.separator();
+        ui.label(format!(
+            "Selected folder: {}",
+            model.selected_asset_rel_dir_normalized()
+        ));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("New file");
+        ui.add_sized(
+            [200.0, 24.0],
+            egui::TextEdit::singleline(&mut model.asset_browser_new_file_name)
+                .hint_text("example.lua"),
+        );
+        if ui.button("Create").clicked() {
+            if let Err(e) = model.create_new_file_in_selected_dir() {
                 model.status.clone_from(&e);
                 model.push_log(e);
             } else {
                 model.status.clear();
             }
         }
-    }
+    });
+    ui.horizontal(|ui| {
+        ui.label("New folder");
+        ui.add_sized(
+            [200.0, 24.0],
+            egui::TextEdit::singleline(&mut model.asset_browser_new_folder_name)
+                .hint_text("scripts"),
+        );
+        if ui.button("Create").clicked() {
+            if let Err(e) = model.create_new_folder_in_selected_dir() {
+                model.status.clone_from(&e);
+                model.push_log(e);
+            } else {
+                model.status.clear();
+            }
+        }
+    });
 
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| {
+        draw_project_tree(ui, model, &project_root, &project_root);
+
+        ui.separator();
+        ui.heading("Registered level assets");
         let snapshot: Vec<_> = model.level.assets.clone();
         for a in snapshot {
             ui.horizontal(|ui| {
@@ -462,8 +524,100 @@ fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
                 }
             });
         }
-        if model.level.assets.is_empty() {
-            ui.label(egui::RichText::new("No assets yet.").weak());
-        }
     });
 }
+
+fn draw_project_tree(ui: &mut egui::Ui, model: &mut EditorModel, root: &Path, dir: &Path) {
+    let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok().map(|x| x.path())).collect(),
+        Err(_) => return,
+    };
+    entries.sort();
+
+    for path in entries {
+        let rel = match path.strip_prefix(root) {
+            Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<invalid>");
+        if path.is_dir() {
+            let selected = model.selected_asset_rel_dir_normalized() == rel;
+            ui.horizontal(|ui| {
+                if ui.selectable_label(selected, format!("📁 {name}")).clicked() {
+                    model.asset_browser_selected_rel_dir = rel.clone();
+                }
+            });
+            ui.indent(format!("dir_{rel}"), |ui| {
+                draw_project_tree(ui, model, root, &path);
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("📄");
+                if ui.button(name).clicked() {
+                    if let Err(e) = model.open_asset_file(&path) {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    } else {
+                        model.status.clear();
+                    }
+                }
+                ui.label(egui::RichText::new(&rel).small().weak());
+            });
+        }
+    }
+}
+
+fn draw_code_editor_window(ctx: &egui::Context, model: &mut EditorModel) {
+    if !model.code_editor_open {
+        return;
+    }
+    let mut open = model.code_editor_open;
+    egui::Window::new("Code editor")
+        .open(&mut open)
+        .resizable(true)
+        .default_size([900.0, 620.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("File:");
+                ui.monospace(&model.code_editor_path);
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    if let Err(e) = model.save_open_code_editor_file() {
+                        model.code_editor_status = e;
+                    }
+                }
+                if ui.button("Reload").clicked() {
+                    match std::fs::read_to_string(&model.code_editor_path) {
+                        Ok(s) => {
+                            model.code_editor_text = s;
+                            model.code_editor_dirty = false;
+                            model.code_editor_status = "Reloaded.".to_string();
+                        }
+                        Err(e) => {
+                            model.code_editor_status =
+                                format!("reload {}: {e}", model.code_editor_path);
+                        }
+                    }
+                }
+            });
+            let resp = ui.add_sized(
+                [ui.available_width(), ui.available_height() - 40.0],
+                egui::TextEdit::multiline(&mut model.code_editor_text)
+                    .desired_rows(30)
+                    .lock_focus(true)
+                    .code_editor(),
+            );
+            if resp.changed() {
+                model.code_editor_dirty = true;
+            }
+            if !model.code_editor_status.is_empty() {
+                ui.label(egui::RichText::new(&model.code_editor_status).small().weak());
+            }
+        });
+    model.code_editor_open = open;
+}
+

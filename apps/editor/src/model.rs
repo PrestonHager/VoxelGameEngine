@@ -14,6 +14,30 @@ pub enum EditorMainTab {
     Assets,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EditorPreferences {
+    #[serde(default = "default_true")]
+    pub embedded_by_default: bool,
+    #[serde(default)]
+    pub external_editor_path: String,
+    #[serde(default = "default_true")]
+    pub use_internal_editor_by_default: bool,
+}
+
+impl Default for EditorPreferences {
+    fn default() -> Self {
+        Self {
+            embedded_by_default: true,
+            external_editor_path: String::new(),
+            use_internal_editor_by_default: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 pub struct EditorModel {
     pub port: u16,
     pub auto_started: Option<Child>,
@@ -25,6 +49,16 @@ pub struct EditorModel {
     pub level_path: String,
     pub project_file_path: String,
     pub current_project: Option<ProjectDocument>,
+    pub preferences: EditorPreferences,
+    pub external_editor_candidates: Vec<String>,
+    pub code_editor_open: bool,
+    pub code_editor_path: String,
+    pub code_editor_text: String,
+    pub code_editor_status: String,
+    pub code_editor_dirty: bool,
+    pub asset_browser_selected_rel_dir: String,
+    pub asset_browser_new_file_name: String,
+    pub asset_browser_new_folder_name: String,
     pub selected_instance: Option<u64>,
     pub main_tab: EditorMainTab,
     /// Embedded only: last engine viewport in **physical pixels** (x, y, w, h) relative to the editor window client origin.
@@ -46,6 +80,16 @@ impl EditorModel {
             level_path: "demo_level.vge.json".into(),
             project_file_path: String::new(),
             current_project: None,
+            preferences: EditorPreferences::default(),
+            external_editor_candidates: Self::discover_external_editor_candidates(),
+            code_editor_open: false,
+            code_editor_path: String::new(),
+            code_editor_text: String::new(),
+            code_editor_status: String::new(),
+            code_editor_dirty: false,
+            asset_browser_selected_rel_dir: ".".to_string(),
+            asset_browser_new_file_name: String::new(),
+            asset_browser_new_folder_name: String::new(),
             selected_instance: None,
             main_tab: EditorMainTab::default(),
             engine_viewport_px: None,
@@ -156,6 +200,111 @@ impl EditorModel {
             self.push_log(self.status.clone());
         } else {
             self.status.clear();
+        }
+    }
+
+    pub fn open_preferences_window(&mut self) {
+        match std::env::current_exe() {
+            Ok(exe) => {
+                let mut cmd = std::process::Command::new(exe);
+                cmd.arg("preferences");
+                match cmd.spawn() {
+                    Ok(_) => {
+                        self.status.clear();
+                        self.push_log("Opened Preferences window.");
+                    }
+                    Err(e) => {
+                        self.status = format!("open preferences: {e}");
+                        self.push_log(self.status.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                self.status = format!("current_exe: {e}");
+                self.push_log(self.status.clone());
+            }
+        }
+    }
+
+    pub fn open_asset_file(&mut self, abs_path: &Path) -> Result<(), String> {
+        if self.preferences.use_internal_editor_by_default {
+            self.open_file_in_internal_editor(abs_path)
+        } else if !self.preferences.external_editor_path.trim().is_empty() {
+            self.open_file_in_external_editor(abs_path)
+                .or_else(|_| self.open_file_in_internal_editor(abs_path))
+        } else {
+            self.open_file_in_internal_editor(abs_path)
+        }
+    }
+
+    pub fn save_open_code_editor_file(&mut self) -> Result<(), String> {
+        if self.code_editor_path.trim().is_empty() {
+            return Err("no file open in internal editor".into());
+        }
+        std::fs::write(&self.code_editor_path, &self.code_editor_text)
+            .map_err(|e| format!("write {}: {e}", self.code_editor_path))?;
+        self.code_editor_dirty = false;
+        self.code_editor_status = format!("Saved {}", self.code_editor_path);
+        Ok(())
+    }
+
+    pub fn create_new_file_in_selected_dir(&mut self) -> Result<(), String> {
+        let name = self.asset_browser_new_file_name.trim();
+        if name.is_empty() {
+            return Err("new file name is empty".into());
+        }
+        let root = self
+            .project_root_dir()
+            .ok_or_else(|| "open a project to create files".to_string())?;
+        let rel_dir = self.selected_asset_rel_dir_normalized();
+        let rel_file = if rel_dir == "." {
+            name.to_string()
+        } else {
+            format!("{rel_dir}/{name}")
+        };
+        let abs = scene::resolve_project_path(&root, &rel_file)
+            .map_err(|e| format!("file path invalid: {e}"))?;
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        if !abs.exists() {
+            std::fs::write(&abs, "").map_err(|e| format!("create {}: {e}", abs.display()))?;
+        }
+        self.asset_browser_new_file_name.clear();
+        self.push_log(format!("Created file {}", abs.display()));
+        Ok(())
+    }
+
+    pub fn create_new_folder_in_selected_dir(&mut self) -> Result<(), String> {
+        let name = self.asset_browser_new_folder_name.trim();
+        if name.is_empty() {
+            return Err("new folder name is empty".into());
+        }
+        let root = self
+            .project_root_dir()
+            .ok_or_else(|| "open a project to create folders".to_string())?;
+        let rel_dir = self.selected_asset_rel_dir_normalized();
+        let rel = if rel_dir == "." {
+            name.to_string()
+        } else {
+            format!("{rel_dir}/{name}")
+        };
+        let abs = scene::resolve_project_path(&root, &rel)
+            .map_err(|e| format!("folder path invalid: {e}"))?;
+        std::fs::create_dir_all(&abs).map_err(|e| format!("mkdir {}: {e}", abs.display()))?;
+        self.asset_browser_new_folder_name.clear();
+        self.push_log(format!("Created folder {}", abs.display()));
+        Ok(())
+    }
+
+    pub fn selected_asset_rel_dir_normalized(&self) -> String {
+        let raw = self.asset_browser_selected_rel_dir.trim();
+        if raw.is_empty() {
+            ".".to_string()
+        } else if raw == "." {
+            ".".to_string()
+        } else {
+            scene::validate_relative_project_path(raw).unwrap_or_else(|_| ".".to_string())
         }
     }
 
@@ -404,6 +553,33 @@ impl EditorModel {
             .map(|p| p.to_path_buf())
     }
 
+    fn open_file_in_internal_editor(&mut self, abs_path: &Path) -> Result<(), String> {
+        let txt = std::fs::read_to_string(abs_path)
+            .map_err(|e| format!("open {} as text: {e}", abs_path.display()))?;
+        self.code_editor_path = abs_path.to_string_lossy().into_owned();
+        self.code_editor_text = txt;
+        self.code_editor_status.clear();
+        self.code_editor_dirty = false;
+        self.code_editor_open = true;
+        Ok(())
+    }
+
+    fn open_file_in_external_editor(&mut self, abs_path: &Path) -> Result<(), String> {
+        let editor = self.preferences.external_editor_path.trim();
+        if editor.is_empty() {
+            return Err("external editor path is empty".into());
+        }
+        let mut cmd = std::process::Command::new(editor);
+        cmd.arg(abs_path);
+        cmd.spawn()
+            .map_err(|e| format!("launch external editor {}: {e}", editor))?;
+        self.push_log(format!(
+            "Opened in external editor: {}",
+            abs_path.to_string_lossy()
+        ));
+        Ok(())
+    }
+
     fn resolve_level_path_for_io(&self) -> Result<PathBuf, String> {
         let p = PathBuf::from(&self.level_path);
         if p.is_absolute() {
@@ -474,5 +650,73 @@ impl EditorModel {
             project_root.display()
         ));
         Ok(())
+    }
+
+    pub fn discover_external_editor_candidates() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+
+        let mut push_if_exists = |p: PathBuf| {
+            if p.is_file() {
+                let s = p.to_string_lossy().into_owned();
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        };
+
+        let mut scan_path_for_names = |names: &[&str]| {
+            if let Some(path_var) = std::env::var_os("PATH") {
+                for dir in std::env::split_paths(&path_var) {
+                    for name in names {
+                        push_if_exists(dir.join(name));
+                    }
+                }
+            }
+        };
+
+        #[cfg(windows)]
+        {
+            let names = [
+                "Code.exe",
+                "Code - Insiders.exe",
+                "Cursor.exe",
+                "sublime_text.exe",
+            ];
+            scan_path_for_names(&names);
+            let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+            let prog_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+            let prog_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+            if let Some(local) = local {
+                push_if_exists(local.join("Programs/Microsoft VS Code/Code.exe"));
+                push_if_exists(local.join("Programs/Cursor/Cursor.exe"));
+            }
+            if let Some(pf) = prog_files {
+                push_if_exists(pf.join("Sublime Text/sublime_text.exe"));
+                push_if_exists(pf.join("Microsoft VS Code/Code.exe"));
+            }
+            if let Some(pf86) = prog_files_x86 {
+                push_if_exists(pf86.join("Microsoft VS Code/Code.exe"));
+                push_if_exists(pf86.join("Sublime Text/sublime_text.exe"));
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            let names = ["code", "cursor", "subl", "sublime_text", "code-insiders"];
+            scan_path_for_names(&names);
+            for fallback in [
+                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                "/usr/bin/code",
+                "/usr/local/bin/code",
+                "/snap/bin/code",
+            ] {
+                push_if_exists(PathBuf::from(fallback));
+            }
+        }
+
+        out.sort();
+        out.dedup();
+        out
     }
 }
