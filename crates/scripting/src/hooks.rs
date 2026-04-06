@@ -16,6 +16,19 @@ pub struct CursorCommands {
     pub cursor_visible: Option<bool>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ScriptInput {
+    pub mouse_dx: f32,
+    pub mouse_dy: f32,
+    pub mouse_pos: Option<(f32, f32)>,
+    pub key_w: bool,
+    pub key_a: bool,
+    pub key_s: bool,
+    pub key_d: bool,
+    pub key_space: bool,
+    pub key_shift: bool,
+}
+
 pub struct ScriptHost {
     lua: Lua,
     logs: Arc<Mutex<Vec<String>>>,
@@ -124,15 +137,7 @@ impl ScriptHost {
         world: &mut World,
         entity_by_instance: &HashMap<u64, Entity>,
         dt: f32,
-        mouse_dx: f32,
-        mouse_dy: f32,
-        mouse_pos: Option<(f32, f32)>,
-        key_w: bool,
-        key_a: bool,
-        key_s: bool,
-        key_d: bool,
-        key_space: bool,
-        key_shift: bool,
+        input: ScriptInput,
     ) -> Result<(), ScriptError> {
         let globals = self.lua.globals();
         let w_raw = world as *mut World as usize;
@@ -150,15 +155,15 @@ impl ScriptHost {
                     world_raw: w_raw,
                     map_raw: m_raw,
                     default_instance: instance_id,
-                    mouse_dx,
-                    mouse_dy,
-                    mouse_pos,
-                    key_w,
-                    key_a,
-                    key_s,
-                    key_d,
-                    key_space,
-                    key_shift,
+                    mouse_dx: input.mouse_dx,
+                    mouse_dy: input.mouse_dy,
+                    mouse_pos: input.mouse_pos,
+                    key_w: input.key_w,
+                    key_a: input.key_a,
+                    key_s: input.key_s,
+                    key_d: input.key_d,
+                    key_space: input.key_space,
+                    key_shift: input.key_shift,
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -180,15 +185,15 @@ impl ScriptHost {
                     world_raw: w_raw,
                     map_raw: m_raw,
                     default_instance: instance_id,
-                    mouse_dx,
-                    mouse_dy,
-                    mouse_pos,
-                    key_w,
-                    key_a,
-                    key_s,
-                    key_d,
-                    key_space,
-                    key_shift,
+                    mouse_dx: input.mouse_dx,
+                    mouse_dy: input.mouse_dy,
+                    mouse_pos: input.mouse_pos,
+                    key_w: input.key_w,
+                    key_a: input.key_a,
+                    key_s: input.key_s,
+                    key_d: input.key_d,
+                    key_space: input.key_space,
+                    key_shift: input.key_shift,
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -507,20 +512,7 @@ fn tick_runs_in_memory_entity_script() {
     };
     let mut world = World::default();
     let map = HashMap::new();
-    host.tick(
-        &mut world,
-        &map,
-        1.0 / 60.0,
-        0.0,
-        0.0,
-        None,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    host.tick(&mut world, &map, 1.0 / 60.0, ScriptInput::default())
         .expect("tick without error");
 }
 

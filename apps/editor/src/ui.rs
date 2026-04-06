@@ -1,9 +1,7 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{
-    EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool,
-};
+use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool};
 use eframe::egui;
 use eframe::egui::{
     menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, PointerButton, Sense, Stroke,
@@ -141,7 +139,11 @@ pub fn draw_editor_ui(
         ui.horizontal(|ui| {
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Level, "Level");
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Assets, "Assets");
-            ui.selectable_value(&mut model.main_tab, EditorMainTab::ModelEditor, "Model Editor");
+            ui.selectable_value(
+                &mut model.main_tab,
+                EditorMainTab::ModelEditor,
+                "Model Editor",
+            );
         });
     });
 
@@ -248,11 +250,23 @@ pub fn draw_editor_ui(
                     });
                     ui.horizontal(|ui| {
                         ui.label("sx");
-                        ui.add(egui::DragValue::new(&mut o.scale[0]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[0])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sy");
-                        ui.add(egui::DragValue::new(&mut o.scale[1]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[1])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                         ui.label("sz");
-                        ui.add(egui::DragValue::new(&mut o.scale[2]).speed(0.05).range(0.001..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut o.scale[2])
+                                .speed(0.05)
+                                .range(0.001..=1000.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("rx");
@@ -920,19 +934,7 @@ fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
         ui.text_edit_singleline(&mut model.voxel_model_editor.export_name);
         if ui.button("Export .vox…").clicked() {
             match model.export_model_vox_dialog() {
-                Ok(Some(asset_id)) => {
-                    let name = model
-                        .level
-                        .assets
-                        .iter()
-                        .find(|a| a.id == asset_id)
-                        .map(|a| a.name.clone())
-                        .unwrap_or_else(|| "Model".to_string());
-                    if let Err(e) = model.add_model_instance(&asset_id, &name) {
-                        model.status.clone_from(&e);
-                        model.push_log(e);
-                    }
-                }
+                Ok(Some(_asset_id)) => {}
                 Ok(None) => {}
                 Err(e) => {
                     model.status.clone_from(&e);
@@ -960,8 +962,16 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
         // Use per-frame pointer delta for stable, predictable movement.
         let d = ui.input(|i| i.pointer.delta());
         let orbit_sens = 0.01_f32;
-        let sx = if model.preferences.invert_orbit_x { 1.0 } else { -1.0 };
-        let sy = if model.preferences.invert_orbit_y { -1.0 } else { 1.0 };
+        let sx = if model.preferences.invert_orbit_x {
+            1.0
+        } else {
+            -1.0
+        };
+        let sy = if model.preferences.invert_orbit_y {
+            -1.0
+        } else {
+            1.0
+        };
         model.voxel_model_editor.orbit_yaw += sx * d.x * orbit_sens;
         model.voxel_model_editor.orbit_pitch += sy * d.y * orbit_sens;
         // Keep angles bounded but continuous to allow infinite orbiting.
@@ -978,8 +988,8 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
         let d = resp.drag_delta();
         // Right-drag moves the pivot center in model-space so later rotations orbit around it.
         let edge_now = model.voxel_model_editor.edge.max(1) as f32;
-        let scale_now =
-            rect.width().min(rect.height()) / (edge_now + model.voxel_model_editor.camera_distance * 0.2);
+        let scale_now = rect.width().min(rect.height())
+            / (edge_now + model.voxel_model_editor.camera_distance * 0.2);
         let model_units_per_px = (1.0 / scale_now.max(0.0001)).clamp(0.001, 10.0);
         model.voxel_model_editor.pan_x += d.x * model_units_per_px;
         model.voxel_model_editor.pan_y -= d.y * model_units_per_px;
@@ -1011,9 +1021,9 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
             let model_radius = model_size * 0.5;
             let adaptive_speed =
                 (model_radius * 0.06 + model.voxel_model_editor.camera_distance * 0.12).max(0.2);
-            model.voxel_model_editor.camera_distance =
-                (model.voxel_model_editor.camera_distance - scroll * adaptive_speed * 0.03)
-                    .clamp(1.0, 1000.0);
+            model.voxel_model_editor.camera_distance = (model.voxel_model_editor.camera_distance
+                - scroll * adaptive_speed * 0.03)
+                .clamp(1.0, 1000.0);
             ui.ctx().request_repaint();
         }
     }
@@ -1021,7 +1031,8 @@ fn draw_model_preview(ui: &mut egui::Ui, model: &mut EditorModel) {
     let cy = model.voxel_model_editor.orbit_yaw.cos();
     let sx = model.voxel_model_editor.orbit_pitch.sin();
     let cx = model.voxel_model_editor.orbit_pitch.cos();
-    let scale = rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
+    let scale =
+        rect.width().min(rect.height()) / (edge + model.voxel_model_editor.camera_distance * 0.2);
     let center = rect.center();
     // Fixed point light from upper-left/front relative to model space.
     let normalize3 = |v: [f32; 3]| -> [f32; 3] {

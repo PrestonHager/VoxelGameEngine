@@ -971,8 +971,10 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                             MouseScrollDelta::LineDelta(_, y) => y,
                             MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
                         };
-                        let f =
-                            preview_camera_forward(inner.engine_state.yaw, inner.engine_state.pitch);
+                        let f = preview_camera_forward(
+                            inner.engine_state.yaw,
+                            inner.engine_state.pitch,
+                        );
                         inner.engine_state.camera_pos += f * scroll * 1.5;
                         inner.gl_win.window().request_redraw();
                     }
