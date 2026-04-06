@@ -23,6 +23,10 @@ impl ScriptHost {
 
     /// Build VM when `VGE_LUA_SCRIPT` is set and/or the level assigns script assets to objects.
     pub fn from_level(level: &Level) -> Option<Self> {
+        Self::from_level_with_base(level, None)
+    }
+
+    pub fn from_level_with_base(level: &Level, base_dir: Option<&Path>) -> Option<Self> {
         let env_script = std::env::var("VGE_LUA_SCRIPT").ok();
         let has_entity_scripts = level.objects.iter().any(|o| o.script_asset_id.is_some());
         if env_script.is_none() && !has_entity_scripts {
@@ -54,7 +58,7 @@ impl ScriptHost {
             let Some(aid) = o.script_asset_id.as_deref() else {
                 continue;
             };
-            let Some(path) = level.resolve_script_asset_path(aid) else {
+            let Some(path) = level.resolve_script_asset_path_with_base(aid, base_dir) else {
                 tracing::warn!(
                     target = "script",
                     "no script asset {aid} for instance {}",

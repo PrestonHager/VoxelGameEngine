@@ -8,6 +8,7 @@ Rust + Vulkan workspace: custom ECS, chunked voxels, meshing, optional **editor*
    :caption: User guide
 
    editor
+   projects
    prefabs
    scripting
 

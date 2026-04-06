@@ -117,6 +117,7 @@ See :doc:`prefabs` for stable ``prefab_id`` values.
 Further reading
 ---------------
 
+* :doc:`projects` — planned ``.vge`` project folder + binary config model.
 * :doc:`prefabs` — built-in prefab IDs and categories.
 * :doc:`scripting` — Lua hooks and ``VGE_LUA_SCRIPT``.
 * Repository ``README.md`` — build matrix and crate overview.

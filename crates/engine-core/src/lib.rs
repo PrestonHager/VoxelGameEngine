@@ -7,6 +7,7 @@ use physics::PhysicsWorld;
 use scene::{CameraAuthoring, Level, PlacedObject, TerrainLayer, TerrainMode};
 use scripting::ScriptHost;
 use std::collections::HashMap;
+use std::path::Path;
 use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
@@ -54,6 +55,10 @@ fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
 
 impl EngineState {
     pub fn from_level(level: &Level) -> Self {
+        Self::from_level_with_asset_root(level, None)
+    }
+
+    pub fn from_level_with_asset_root(level: &Level, asset_root: Option<&Path>) -> Self {
         let mut world = World::default();
         let mut entity_by_instance = HashMap::new();
 
@@ -87,7 +92,7 @@ impl EngineState {
         let mut vw = ChunkWorld::new(16);
         apply_terrain_layer(&mut vw, &level.terrain);
 
-        let script = ScriptHost::from_level(level);
+        let script = ScriptHost::from_level_with_base(level, asset_root);
 
         Self {
             world,
@@ -104,7 +109,11 @@ impl EngineState {
     }
 
     pub fn apply_level(&mut self, level: &Level) {
-        *self = Self::from_level(level);
+        *self = Self::from_level_with_asset_root(level, None);
+    }
+
+    pub fn apply_level_with_asset_root(&mut self, level: &Level, asset_root: Option<&Path>) {
+        *self = Self::from_level_with_asset_root(level, asset_root);
     }
 }
 

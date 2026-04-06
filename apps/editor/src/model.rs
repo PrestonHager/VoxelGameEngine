@@ -1,6 +1,6 @@
 //! Shared editor document state (eframe and embedded runners).
 
-use scene::{AssetKind, AssetRecord, CameraAuthoring, Level, PlacedObject};
+use scene::{AssetKind, AssetRecord, CameraAuthoring, Level, PlacedObject, ProjectDocument};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use tracing::info;
@@ -23,6 +23,8 @@ pub struct EditorModel {
     pub level: Level,
     pub next_instance_id: u64,
     pub level_path: String,
+    pub project_file_path: String,
+    pub current_project: Option<ProjectDocument>,
     pub selected_instance: Option<u64>,
     pub main_tab: EditorMainTab,
     /// Embedded only: last engine viewport in **physical pixels** (x, y, w, h) relative to the editor window client origin.
@@ -42,6 +44,8 @@ impl EditorModel {
             level: Level::default(),
             next_instance_id: 1,
             level_path: "demo_level.vge.json".into(),
+            project_file_path: String::new(),
+            current_project: None,
             selected_instance: None,
             main_tab: EditorMainTab::default(),
             engine_viewport_px: None,
@@ -55,7 +59,8 @@ impl EditorModel {
             Ok(()) => {
                 if let Some(es) = embedded {
                     let level = self.level.clone();
-                    es.apply_level(&level);
+                    let asset_root = self.project_root_dir();
+                    es.apply_level_with_asset_root(&level, asset_root.as_deref());
                     self.pending_engine_repaint = true;
                     self.status.clear();
                     self.push_log("Play: applied level to embedded engine.");
@@ -122,6 +127,59 @@ impl EditorModel {
         }
     }
 
+    pub fn new_project_dialog(&mut self) {
+        let Some(seed_path) = rfd::FileDialog::new()
+            .add_filter("VGE Project", &["vge"])
+            .set_file_name("New Project.vge")
+            .save_file()
+        else {
+            return;
+        };
+        if let Err(e) = self.create_new_project_from_seed_path(&seed_path) {
+            self.status = format!("create project: {e}");
+            self.push_log(self.status.clone());
+        } else {
+            self.status.clear();
+        }
+    }
+
+    pub fn open_project_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("VGE Project", &["vge"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.project_file_path = path.to_string_lossy().into_owned();
+        if let Err(e) = self.load_project_file() {
+            self.status = format!("open project: {e}");
+            self.push_log(self.status.clone());
+        } else {
+            self.status.clear();
+        }
+    }
+
+    pub fn save_project_as_dialog(&mut self) {
+        let default_name = std::path::Path::new(&self.project_file_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("project.vge");
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("VGE Project", &["vge"])
+            .set_file_name(default_name)
+            .save_file()
+        else {
+            return;
+        };
+        self.project_file_path = path.to_string_lossy().into_owned();
+        if let Err(e) = self.save_project_file() {
+            self.status = format!("save project: {e}");
+            self.push_log(self.status.clone());
+        } else {
+            self.status.clear();
+        }
+    }
+
     fn asset_kind_from_path(p: &Path) -> Result<AssetKind, String> {
         let ext = p
             .extension()
@@ -140,6 +198,7 @@ impl EditorModel {
 
     /// Register imported files on the level (paths should exist).
     pub fn import_asset_paths(&mut self, paths: Vec<PathBuf>) -> Result<(), String> {
+        let project_root = self.project_root_dir();
         for p in paths {
             let kind = Self::asset_kind_from_path(&p)?;
             if kind == AssetKind::Vox {
@@ -156,14 +215,21 @@ impl EditorModel {
                 .and_then(|s| s.to_str())
                 .unwrap_or("asset")
                 .to_string();
+            let stored_path = if let Some(root) = project_root.as_deref() {
+                scene::make_project_relative_path(root, &abs)
+                    .map_err(|e| format!("asset outside project root: {e}"))?
+            } else {
+                abs.to_string_lossy().into_owned()
+            };
             self.level.assets.push(AssetRecord {
                 id: id.clone(),
                 name: name.clone(),
                 kind,
-                path: abs.to_string_lossy().into_owned(),
+                path: stored_path,
             });
             self.push_log(format!("Imported asset {name} ({kind:?}) id={id}"));
         }
+        self.sync_project_assets_from_level();
         Ok(())
     }
 
@@ -174,6 +240,7 @@ impl EditorModel {
                 o.script_asset_id = None;
             }
         }
+        self.sync_project_assets_from_level();
     }
 
     pub fn push_log(&mut self, line: impl Into<String>) {
@@ -250,14 +317,7 @@ impl EditorModel {
     }
 
     pub fn absolutize_level_path(&self) -> Result<String, String> {
-        let p = PathBuf::from(&self.level_path);
-        let full = if p.is_absolute() {
-            p
-        } else {
-            std::env::current_dir()
-                .map_err(|e| format!("cwd: {e}"))?
-                .join(p)
-        };
+        let full = self.resolve_level_path_for_io()?;
         full.canonicalize()
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| format!("resolve path: {e}"))
@@ -268,19 +328,151 @@ impl EditorModel {
             .level
             .to_json_pretty()
             .map_err(|e| format!("serialize: {e}"))?;
-        std::fs::write(&self.level_path, json)
-            .map_err(|e| format!("write {}: {e}", self.level_path))?;
+        let level_path = self.resolve_level_path_for_io()?;
+        if let Some(parent) = level_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&level_path, json)
+            .map_err(|e| format!("write {}: {e}", level_path.display()))?;
+        self.update_project_default_level_from_model();
+        if self.current_project.is_some() {
+            self.save_project_file()?;
+        }
         self.push_log(format!("Saved {}", self.level_path));
         Ok(())
     }
 
     pub fn load_level_file(&mut self) -> Result<(), String> {
-        let s = std::fs::read_to_string(&self.level_path)
-            .map_err(|e| format!("read {}: {e}", self.level_path))?;
+        let level_path = self.resolve_level_path_for_io()?;
+        let s = std::fs::read_to_string(&level_path)
+            .map_err(|e| format!("read {}: {e}", level_path.display()))?;
         self.level = Level::from_json_str(&s).map_err(|e| format!("parse JSON: {e}"))?;
         self.recompute_next_id();
         self.selected_instance = None;
         self.push_log(format!("Loaded {}", self.level_path));
+        self.sync_project_assets_from_level();
+        Ok(())
+    }
+
+    pub fn save_project_file(&mut self) -> Result<(), String> {
+        let mut project = self
+            .current_project
+            .clone()
+            .ok_or_else(|| "no active project".to_string())?;
+        if self.project_file_path.is_empty() {
+            return Err("project file path is empty".into());
+        }
+        project.assets = self.level.assets.clone();
+        if project.name.trim().is_empty() {
+            project.name = "Project".into();
+        }
+        if let Some(root) = self.project_root_dir() {
+            if let Ok(rel) = scene::make_project_relative_path(&root, &self.resolve_level_path_for_io()?) {
+                project.default_level = Some(rel);
+            }
+        }
+        let path = PathBuf::from(&self.project_file_path);
+        project
+            .save_to_path_atomic(&path)
+            .map_err(|e| format!("write {}: {e}", path.display()))?;
+        self.current_project = Some(project);
+        self.push_log(format!("Saved project {}", self.project_file_path));
+        Ok(())
+    }
+
+    pub fn load_project_file(&mut self) -> Result<(), String> {
+        let path = PathBuf::from(&self.project_file_path);
+        let project = ProjectDocument::load_from_path(&path)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        self.current_project = Some(project.clone());
+        self.push_log(format!("Loaded project {}", self.project_file_path));
+        if let Some(default_level) = project.default_level {
+            self.level_path = default_level;
+            if let Err(e) = self.load_level_file() {
+                self.push_log(format!("project default level load failed: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn project_root_dir(&self) -> Option<PathBuf> {
+        if self.project_file_path.is_empty() {
+            return None;
+        }
+        PathBuf::from(&self.project_file_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+    }
+
+    fn resolve_level_path_for_io(&self) -> Result<PathBuf, String> {
+        let p = PathBuf::from(&self.level_path);
+        if p.is_absolute() {
+            return Ok(p);
+        }
+        if let Some(root) = self.project_root_dir() {
+            return scene::resolve_project_path(&root, &self.level_path)
+                .map_err(|e| format!("project level path: {e}"));
+        }
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .map_err(|e| format!("cwd: {e}"))
+    }
+
+    fn sync_project_assets_from_level(&mut self) {
+        if let Some(project) = self.current_project.as_mut() {
+            project.assets = self.level.assets.clone();
+        }
+    }
+
+    fn update_project_default_level_from_model(&mut self) {
+        let root = self.project_root_dir();
+        let level_abs = self.resolve_level_path_for_io();
+        if let (Some(project), Some(root), Ok(level_abs)) = (self.current_project.as_mut(), root, level_abs) {
+            if let Ok(rel) = scene::make_project_relative_path(&root, &level_abs) {
+                project.default_level = Some(rel);
+            }
+        }
+    }
+
+    fn create_new_project_from_seed_path(&mut self, seed_path: &Path) -> Result<(), String> {
+        let parent = seed_path
+            .parent()
+            .ok_or_else(|| format!("invalid project location: {}", seed_path.display()))?;
+        let name = seed_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Project")
+            .to_string();
+
+        let project_root = parent.join(&name);
+        let project_file = project_root.join(format!("{name}.vge"));
+        let levels_dir = project_root.join("levels");
+        let assets_dir = project_root.join("assets");
+        let scripts_dir = project_root.join("scripts");
+
+        std::fs::create_dir_all(&levels_dir)
+            .map_err(|e| format!("mkdir {}: {e}", levels_dir.display()))?;
+        std::fs::create_dir_all(&assets_dir)
+            .map_err(|e| format!("mkdir {}: {e}", assets_dir.display()))?;
+        std::fs::create_dir_all(&scripts_dir)
+            .map_err(|e| format!("mkdir {}: {e}", scripts_dir.display()))?;
+
+        self.level = Level::default();
+        self.level.name = format!("{name} Level");
+        self.level.assets.clear();
+        self.recompute_next_id();
+        self.selected_instance = None;
+        self.level_path = "levels/main.vge.json".to_string();
+        self.project_file_path = project_file.to_string_lossy().into_owned();
+        self.current_project = Some(ProjectDocument::new(name.clone()));
+
+        self.save_level_file()?;
+        self.push_log(format!(
+            "Created project scaffold at {}",
+            project_root.display()
+        ));
         Ok(())
     }
 }

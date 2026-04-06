@@ -20,6 +20,8 @@ const STATE_FILE: &str = "editor_state.json";
 pub struct EditorSessionState {
     pub format_version: u32,
     pub level_path: String,
+    #[serde(default)]
+    pub project_file_path: String,
     pub main_tab: EditorMainTab,
 }
 
@@ -82,6 +84,12 @@ pub fn apply_loaded_session(model: &mut EditorModel) {
     }
 
     model.main_tab = s.main_tab;
+    model.project_file_path = s.project_file_path.trim().to_string();
+    if !model.project_file_path.is_empty() {
+        if let Err(e) = model.load_project_file() {
+            model.push_log(format!("Could not load project file from session: {e}"));
+        }
+    }
 
     let path = s.level_path.trim().to_string();
     if path.is_empty() {
@@ -117,6 +125,7 @@ pub fn save_from_model(model: &EditorModel) -> io::Result<()> {
     let state = EditorSessionState {
         format_version: FORMAT_VERSION,
         level_path: model.level_path.clone(),
+        project_file_path: model.project_file_path.clone(),
         main_tab: model.main_tab,
     };
     let json = serde_json::to_string_pretty(&state)
@@ -140,12 +149,14 @@ mod tests {
         let s = EditorSessionState {
             format_version: FORMAT_VERSION,
             level_path: "C:\\proj\\level.json".into(),
+            project_file_path: "C:\\proj\\project.vge".into(),
             main_tab: EditorMainTab::Level,
         };
         let json = serde_json::to_string_pretty(&s).unwrap();
         let back: EditorSessionState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.format_version, s.format_version);
         assert_eq!(back.level_path, s.level_path);
+        assert_eq!(back.project_file_path, s.project_file_path);
         assert_eq!(back.main_tab, s.main_tab);
     }
 
@@ -154,6 +165,7 @@ mod tests {
         let v: serde_json::Value = serde_json::json!({
             "format_version": 999,
             "level_path": "",
+            "project_file_path": "",
             "main_tab": "level"
         });
         let s: EditorSessionState = serde_json::from_value(v).unwrap();

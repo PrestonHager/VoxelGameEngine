@@ -54,6 +54,28 @@ pub fn draw_editor_ui(
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
+                if ui.button("New Project…").clicked() {
+                    model.new_project_dialog();
+                    ui.close_menu();
+                }
+                if ui.button("Open Project…").clicked() {
+                    model.open_project_dialog();
+                    ui.close_menu();
+                }
+                if ui.button("Save Project").clicked() {
+                    if let Err(e) = model.save_project_file() {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    } else {
+                        model.status.clear();
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Save Project As…").clicked() {
+                    model.save_project_as_dialog();
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui
                     .add(Button::new("Open…").shortcut_text(ctx.format_shortcut(&kb_open())))
                     .clicked()
@@ -306,6 +328,10 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
         ui.label("Level file");
         ui.text_edit_singleline(&mut model.level_path);
     });
+    ui.horizontal(|ui| {
+        ui.label("Project file");
+        ui.text_edit_singleline(&mut model.project_file_path);
+    });
 
     if !model.status.is_empty() {
         ui.colored_label(Color32::from_rgb(220, 140, 80), &model.status);
@@ -406,7 +432,7 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
 fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
     ui.heading("Asset manager");
     ui.label(egui::RichText::new(
-        "Import level JSON, MagicaVoxel .vox models, or Lua .lua scripts. Paths are stored in the level file (absolute after import). \
+        "Import level JSON, MagicaVoxel .vox models, or Lua .lua scripts. Paths are stored in the level file/project file (project-relative when a .vge project is active). \
          Assign a script to an object from the Scene panel (Lua chunk must return function(dt, api) … end).",
     )
     .weak());

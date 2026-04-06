@@ -96,7 +96,15 @@ impl ApplicationHandler for RunnerApp {
                             match std::fs::read_to_string(&path) {
                                 Ok(s) => match scene::Level::from_json_str(&s) {
                                     Ok(level) => {
-                                        self.state.apply_level(&level);
+                                        let project_root = scene::discover_project_root_from_level_path(
+                                            std::path::Path::new(&path),
+                                        );
+                                        let fallback_root = std::path::Path::new(&path)
+                                            .parent()
+                                            .map(|p| p.to_path_buf());
+                                        let asset_root =
+                                            project_root.as_deref().or(fallback_root.as_deref());
+                                        self.state.apply_level_with_asset_root(&level, asset_root);
                                         info!("Loaded level from {path}");
                                     }
                                     Err(e) => error!("level JSON {path}: {e}"),
