@@ -81,6 +81,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          shared-key: workspace-${{ runner.os }}
+          workspaces: |
+            . -> target
 
       - name: Install Vulkan (Linux)
         if: runner.os == 'Linux'

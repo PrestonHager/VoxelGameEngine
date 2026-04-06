@@ -55,7 +55,7 @@ impl GlutinWindowContext {
         use glutin::display::GlDisplay;
         use glutin::prelude::GlSurface;
 
-        let mut winit_window_builder = winit::window::WindowAttributes::default()
+        let winit_window_builder = winit::window::WindowAttributes::default()
             .with_resizable(true)
             .with_inner_size(LogicalSize {
                 width: 1200.0,

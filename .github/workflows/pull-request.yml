@@ -34,6 +34,11 @@ jobs:
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          shared-key: workspace-${{ runner.os }}
+          workspaces: |
+            . -> target
 
       - name: cargo fmt --check
         id: fmt
@@ -87,6 +92,11 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          shared-key: workspace-${{ runner.os }}
+          workspaces: |
+            . -> target
 
       - name: Install Vulkan (Linux)
         if: runner.os == 'Linux'
