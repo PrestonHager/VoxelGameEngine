@@ -521,7 +521,7 @@ fn tick_runs_in_memory_entity_script() {
         false,
         false,
     )
-        .expect("tick without error");
+    .expect("tick without error");
 }
 
 #[cfg(test)]
