@@ -29,6 +29,16 @@ pub struct Velocity(pub Vec3);
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rotation(pub Vec3);
 
+/// Non-uniform world scale.
+#[derive(Clone, Copy, Debug)]
+pub struct Scale(pub Vec3);
+
+impl Default for Scale {
+    fn default() -> Self {
+        Self(Vec3::ONE)
+    }
+}
+
 /// Stable prefab / object-type id from the scene library (rendering uses this later).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrefabRef(pub u32);
@@ -62,6 +72,7 @@ struct Archetype {
     entities: Vec<Entity>,
     positions: Vec<Position>,
     rotations: Vec<Rotation>,
+    scales: Vec<Scale>,
     velocities: Vec<Velocity>,
 }
 
@@ -76,6 +87,7 @@ struct ArchetypePosPrefab {
     entities: Vec<Entity>,
     positions: Vec<Position>,
     rotations: Vec<Rotation>,
+    scales: Vec<Scale>,
     prefabs: Vec<PrefabRef>,
 }
 
@@ -84,6 +96,7 @@ struct ArchetypePosCamera {
     entities: Vec<Entity>,
     positions: Vec<Position>,
     rotations: Vec<Rotation>,
+    scales: Vec<Scale>,
     cameras: Vec<CameraRig>,
 }
 
@@ -150,6 +163,7 @@ impl World {
             arch.entities.push(entity);
             arch.positions.push(pos);
             arch.rotations.push(Rotation::default());
+            arch.scales.push(Scale::default());
             arch.velocities.push(v);
         } else {
             let arch = &mut self.archetype_pos_only;
@@ -158,6 +172,7 @@ impl World {
             arch.entities.push(entity);
             arch.positions.push(pos);
             arch.rotations.push(Rotation::default());
+            arch.scales.push(Scale::default());
         }
 
         entity
@@ -174,6 +189,7 @@ impl World {
         arch.entities.push(entity);
         arch.positions.push(pos);
         arch.rotations.push(Rotation::default());
+        arch.scales.push(Scale::default());
         arch.prefabs.push(prefab);
 
         entity
@@ -191,6 +207,7 @@ impl World {
         arch.positions.push(pos);
         arch.rotations
             .push(Rotation(Vec3::new(rig.pitch, rig.yaw, 0.0)));
+        arch.scales.push(Scale::default());
         arch.cameras.push(rig);
 
         entity
@@ -230,6 +247,7 @@ impl World {
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
             arch.rotations.swap_remove(row);
+            arch.scales.swap_remove(row);
             if with_vel {
                 arch.velocities.swap_remove(row);
             }
@@ -240,6 +258,7 @@ impl World {
             arch.entities.pop();
             arch.positions.pop();
             arch.rotations.pop();
+            arch.scales.pop();
             if with_vel {
                 arch.velocities.pop();
             }
@@ -256,6 +275,7 @@ impl World {
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
             arch.rotations.swap_remove(row);
+            arch.scales.swap_remove(row);
             arch.prefabs.swap_remove(row);
             if let Some(m) = all_meta.get_mut(moved.index as usize) {
                 m.row = row;
@@ -264,6 +284,7 @@ impl World {
             arch.entities.pop();
             arch.positions.pop();
             arch.rotations.pop();
+            arch.scales.pop();
             arch.prefabs.pop();
         }
     }
@@ -278,6 +299,7 @@ impl World {
             arch.entities.swap_remove(row);
             arch.positions.swap_remove(row);
             arch.rotations.swap_remove(row);
+            arch.scales.swap_remove(row);
             arch.cameras.swap_remove(row);
             if let Some(m) = all_meta.get_mut(moved.index as usize) {
                 m.row = row;
@@ -286,6 +308,7 @@ impl World {
             arch.entities.pop();
             arch.positions.pop();
             arch.rotations.pop();
+            arch.scales.pop();
             arch.cameras.pop();
         }
     }
@@ -352,6 +375,49 @@ impl World {
         }
         self.archetype_pos_vel.velocities[m.row] = vel;
         true
+    }
+
+    pub fn scale_of(&self, entity: Entity) -> Option<Scale> {
+        let m = self.entities.get(entity.index as usize)?;
+        if !m.alive || m.generation != entity.generation {
+            return None;
+        }
+        Some(match m.archetype_id {
+            0 => self.archetype_pos_only.scales[m.row],
+            1 => self.archetype_pos_vel.scales[m.row],
+            2 => self.archetype_pos_prefab.scales[m.row],
+            3 => self.archetype_pos_camera.scales[m.row],
+            _ => return None,
+        })
+    }
+
+    pub fn set_scale(&mut self, entity: Entity, scale: Scale) -> bool {
+        let Some(m) = self.entities.get(entity.index as usize) else {
+            return false;
+        };
+        if !m.alive || m.generation != entity.generation {
+            return false;
+        }
+        let row = m.row;
+        match m.archetype_id {
+            0 => {
+                self.archetype_pos_only.scales[row] = scale;
+                true
+            }
+            1 => {
+                self.archetype_pos_vel.scales[row] = scale;
+                true
+            }
+            2 => {
+                self.archetype_pos_prefab.scales[row] = scale;
+                true
+            }
+            3 => {
+                self.archetype_pos_camera.scales[row] = scale;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn rotation_of(&self, entity: Entity) -> Option<Rotation> {
@@ -451,6 +517,31 @@ impl World {
                     .entities
                     .iter()
                     .zip(self.archetype_pos_camera.positions.iter())
+                    .map(|(&e, &p)| (e, p)),
+            )
+    }
+
+    /// All entity positions except camera-rig entities.
+    ///
+    /// Useful for render passes where camera objects should not be drawn as world voxels.
+    pub fn positions_non_camera(&self) -> impl Iterator<Item = (Entity, Position)> + '_ {
+        self.archetype_pos_only
+            .entities
+            .iter()
+            .zip(self.archetype_pos_only.positions.iter())
+            .map(|(&e, &p)| (e, p))
+            .chain(
+                self.archetype_pos_vel
+                    .entities
+                    .iter()
+                    .zip(self.archetype_pos_vel.positions.iter())
+                    .map(|(&e, &p)| (e, p)),
+            )
+            .chain(
+                self.archetype_pos_prefab
+                    .entities
+                    .iter()
+                    .zip(self.archetype_pos_prefab.positions.iter())
                     .map(|(&e, &p)| (e, p)),
             )
     }

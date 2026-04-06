@@ -10,6 +10,7 @@ struct VsIn {
     @location(1) color: vec4<f32>,
     @location(2) instance_pos: vec3<f32>,
     @location(3) instance_rot: vec3<f32>, // pitch, yaw, roll in radians
+    @location(4) instance_scale: vec3<f32>,
 }
 
 struct VsOut {
@@ -46,9 +47,10 @@ fn vs_main(v: VsIn) -> VsOut {
         vec3<f32>(0.0, 0.0, 1.0)
     );
 
-    // Rotate around cube center so it spins in place.
+    // Scale + rotate around cube center so objects can be uniformly/non-uniformly sized.
     let local = v.pos - vec3<f32>(0.5, 0.5, 0.5);
-    let rotated = (rz * ry * rx) * local + vec3<f32>(0.5, 0.5, 0.5);
+    let scaled = local * v.instance_scale;
+    let rotated = (rz * ry * rx) * scaled + vec3<f32>(0.5, 0.5, 0.5);
     let world = vec4<f32>(rotated + v.instance_pos, 1.0);
     var o: VsOut;
     o.clip_pos = globals.view_proj * world;

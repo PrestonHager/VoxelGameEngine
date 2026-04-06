@@ -19,6 +19,14 @@ fn default_cam_fov() -> f32 {
     45.0
 }
 
+fn default_scale() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+fn default_rotation() -> [f32; 3] {
+    [0.0, 0.0, 0.0]
+}
+
 /// Optional camera rig when `prefab_id` is `ids::CAMERA`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CameraAuthoring {
@@ -99,6 +107,11 @@ pub struct PlacedObject {
     pub prefab_id: u32,
     pub name: String,
     pub position: [f32; 3],
+    #[serde(default = "default_scale")]
+    pub scale: [f32; 3],
+    /// Euler radians: pitch (x), yaw (y), roll (z).
+    #[serde(default = "default_rotation")]
+    pub rotation: [f32; 3],
     #[serde(default = "default_true")]
     pub visible: bool,
     #[serde(default)]
@@ -106,6 +119,9 @@ pub struct PlacedObject {
     /// References `AssetRecord.id` where `kind == script` (optional per-object Lua).
     #[serde(default)]
     pub script_asset_id: Option<String>,
+    /// References `AssetRecord.id` where `kind == vox` (optional per-object model).
+    #[serde(default)]
+    pub model_asset_id: Option<String>,
 }
 
 /// Serializable level: objects + terrain; used for save/load and IPC file path loads.
@@ -185,6 +201,23 @@ impl Level {
     pub fn resolve_script_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
         self.resolve_script_asset_path_with_base(asset_id, None)
     }
+
+    /// VOX assets only (for model instances).
+    pub fn resolve_vox_asset_path_with_base(
+        &self,
+        asset_id: &str,
+        base_dir: Option<&Path>,
+    ) -> Option<PathBuf> {
+        let rec = self.assets.iter().find(|a| a.id == asset_id)?;
+        if rec.kind != AssetKind::Vox {
+            return None;
+        }
+        self.resolve_asset_path_with_base(asset_id, base_dir)
+    }
+
+    pub fn resolve_vox_asset_path(&self, asset_id: &str) -> Option<PathBuf> {
+        self.resolve_vox_asset_path_with_base(asset_id, None)
+    }
 }
 
 #[cfg(test)]
@@ -219,9 +252,12 @@ mod tests {
             prefab_id: 1,
             name: "Cube A".into(),
             position: [1.0, 2.0, 3.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
             visible: true,
             camera: None,
             script_asset_id: Some("s1".into()),
+            model_asset_id: Some("a1".into()),
         });
         let s = level.to_json_pretty().unwrap();
         let back = Level::from_json_str(&s).unwrap();
@@ -232,6 +268,7 @@ mod tests {
         assert_eq!(back.objects.len(), 1);
         assert_eq!(back.objects[0].position, [1.0, 2.0, 3.0]);
         assert_eq!(back.objects[0].script_asset_id.as_deref(), Some("s1"));
+        assert_eq!(back.objects[0].model_asset_id.as_deref(), Some("a1"));
     }
 
     #[test]
@@ -262,5 +299,19 @@ mod tests {
         };
         let p = level.resolve_script_asset_path("s1").expect("script path");
         assert_eq!(p, abs);
+    }
+
+    #[test]
+    fn resolve_vox_asset_path_rejects_non_vox_assets() {
+        let level = Level {
+            assets: vec![AssetRecord {
+                id: "s1".into(),
+                name: "Script".into(),
+                kind: AssetKind::Script,
+                path: "/abs/fake.lua".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(level.resolve_vox_asset_path("s1").is_none());
     }
 }

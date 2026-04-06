@@ -2,11 +2,11 @@
 //! from level assets (`_entity_scripts` table, `return function(dt, api) ... end`).
 
 use crate::ScriptError;
-use ecs::{Entity, Position, Rotation, Velocity, World};
+use ecs::{Entity, Position, Rotation, Scale, Velocity, World};
 use glam::Vec3;
 use mlua::{Function, Lua, Table, Value};
 use scene::Level;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -127,6 +127,7 @@ impl ScriptHost {
         mouse_dx: f32,
         mouse_dy: f32,
         mouse_pos: Option<(f32, f32)>,
+        keys_down: &HashSet<String>,
     ) -> Result<(), ScriptError> {
         let globals = self.lua.globals();
         let w_raw = world as *mut World as usize;
@@ -147,6 +148,12 @@ impl ScriptHost {
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
+                    key_w: keys_down.contains("w"),
+                    key_a: keys_down.contains("a"),
+                    key_s: keys_down.contains("s"),
+                    key_d: keys_down.contains("d"),
+                    key_space: keys_down.contains("space"),
+                    key_shift: keys_down.contains("shift"),
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -171,6 +178,12 @@ impl ScriptHost {
                     mouse_dx,
                     mouse_dy,
                     mouse_pos,
+                    key_w: keys_down.contains("w"),
+                    key_a: keys_down.contains("a"),
+                    key_s: keys_down.contains("s"),
+                    key_d: keys_down.contains("d"),
+                    key_space: keys_down.contains("space"),
+                    key_shift: keys_down.contains("shift"),
                     logs: Arc::clone(&self.logs),
                     cursor_commands: Arc::clone(&self.cursor_commands),
                 };
@@ -234,6 +247,12 @@ struct ApiContext {
     mouse_dx: f32,
     mouse_dy: f32,
     mouse_pos: Option<(f32, f32)>,
+    key_w: bool,
+    key_a: bool,
+    key_s: bool,
+    key_d: bool,
+    key_space: bool,
+    key_shift: bool,
     logs: Arc<Mutex<Vec<String>>>,
     cursor_commands: Arc<Mutex<CursorCommands>>,
 }
@@ -247,6 +266,12 @@ fn create_api_table(lua: &Lua, ctx: &ApiContext) -> mlua::Result<Table> {
     let mouse_dx = ctx.mouse_dx;
     let mouse_dy = ctx.mouse_dy;
     let mouse_pos = ctx.mouse_pos;
+    let key_w = ctx.key_w;
+    let key_a = ctx.key_a;
+    let key_s = ctx.key_s;
+    let key_d = ctx.key_d;
+    let key_space = ctx.key_space;
+    let key_shift = ctx.key_shift;
     let logs = Arc::clone(&ctx.logs);
     let cursor_commands = Arc::clone(&ctx.cursor_commands);
 
@@ -325,6 +350,38 @@ fn create_api_table(lua: &Lua, ctx: &ApiContext) -> mlua::Result<Table> {
     )?;
 
     t.set(
+        "get_scale",
+        lua.create_function(move |lua, instance_id: u64| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(Value::Nil);
+            };
+            let Some(s) = world.scale_of(*e) else {
+                return Ok(Value::Nil);
+            };
+            let out = lua.create_table()?;
+            out.set("x", s.0.x)?;
+            out.set("y", s.0.y)?;
+            out.set("z", s.0.z)?;
+            Ok(Value::Table(out))
+        })?,
+    )?;
+
+    t.set(
+        "set_scale",
+        lua.create_function(move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
+            let world = unsafe { &mut *(world_raw as *mut World) };
+            let map = unsafe { &*(map_raw as *const HashMap<u64, Entity>) };
+            let Some(e) = map.get(&instance_id) else {
+                return Ok(false);
+            };
+            let s = Vec3::new(x.max(0.0001), y.max(0.0001), z.max(0.0001));
+            Ok(world.set_scale(*e, Scale(s)))
+        })?,
+    )?;
+
+    t.set(
         "set_velocity",
         lua.create_function(move |_, (instance_id, x, y, z): (u64, f32, f32, f32)| {
             let world = unsafe { &mut *(world_raw as *mut World) };
@@ -351,6 +408,21 @@ fn create_api_table(lua: &Lua, ctx: &ApiContext) -> mlua::Result<Table> {
             } else {
                 Ok(Value::Nil)
             }
+        })?,
+    )?;
+    t.set(
+        "is_key_down",
+        lua.create_function(move |_, key: String| {
+            let down = match key.to_ascii_lowercase().as_str() {
+                "w" => key_w,
+                "a" => key_a,
+                "s" => key_s,
+                "d" => key_d,
+                "space" => key_space,
+                "shift" => key_shift,
+                _ => false,
+            };
+            Ok(down)
         })?,
     )?;
 
@@ -430,7 +502,8 @@ fn tick_runs_in_memory_entity_script() {
     };
     let mut world = World::default();
     let map = HashMap::new();
-    host.tick(&mut world, &map, 1.0 / 60.0, 0.0, 0.0, None)
+    let keys = HashSet::new();
+    host.tick(&mut world, &map, 1.0 / 60.0, 0.0, 0.0, None, &keys)
         .expect("tick without error");
 }
 

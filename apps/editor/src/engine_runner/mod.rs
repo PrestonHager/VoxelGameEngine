@@ -12,8 +12,10 @@ use std::time::Instant;
 use tracing::{error, info};
 use winit::application::ApplicationHandler;
 use winit::event::DeviceEvent;
+use winit::event::ElementState;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::KeyCode;
 use winit::window::{Window, WindowId};
 
 pub fn run() {
@@ -100,6 +102,31 @@ impl ApplicationHandler for RunnerApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.state.on_cursor_moved(position.x, position.y);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let down = event.state == ElementState::Pressed;
+                match event.physical_key {
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyW) => {
+                        self.state.set_key_down("w", down)
+                    }
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyA) => {
+                        self.state.set_key_down("a", down)
+                    }
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyS) => {
+                        self.state.set_key_down("s", down)
+                    }
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyD) => {
+                        self.state.set_key_down("d", down)
+                    }
+                    winit::keyboard::PhysicalKey::Code(KeyCode::Space) => {
+                        self.state.set_key_down("space", down)
+                    }
+                    winit::keyboard::PhysicalKey::Code(KeyCode::ShiftLeft)
+                    | winit::keyboard::PhysicalKey::Code(KeyCode::ShiftRight) => {
+                        self.state.set_key_down("shift", down)
+                    }
+                    _ => {}
+                }
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();

@@ -24,9 +24,9 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{DeviceEvent, WindowEvent};
+use winit::event::{DeviceEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::raw_window_handle::HasWindowHandle;
 use winit::window::CursorGrabMode;
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -212,7 +212,11 @@ fn render_engine_frame(inner: &mut Inner) {
         return;
     }
     let aspect = sz.width as f32 / sz.height as f32;
-    let vp = inner.engine_state.view_projection(aspect);
+    let vp = if inner.model.preview_mode_active && !inner.model.play_mode_active {
+        inner.engine_state.free_view_projection(aspect)
+    } else {
+        inner.engine_state.view_projection(aspect)
+    };
     let inst = inner.engine_state.voxel_instances_for_stream();
     // SAFETY: draw uses the initialized swapchain for `win`.
     match unsafe { inner.vk.draw_frame(&inst, vp) } {
@@ -286,6 +290,9 @@ struct Inner {
     sim_accum_s: f32,
     vsync_enabled_applied: bool,
     device_events_always: bool,
+    preview_orbiting: bool,
+    preview_panning: bool,
+    preview_last_cursor: Option<(f64, f64)>,
 }
 
 fn set_engine_input_capture(inner: &mut Inner, capture: bool) {
@@ -317,6 +324,27 @@ fn set_device_event_mode(event_loop: &ActiveEventLoop, inner: &mut Inner, always
         DeviceEvents::WhenFocused
     });
     inner.device_events_always = always;
+}
+
+fn apply_movement_key(inner: &mut Inner, event: &winit::event::KeyEvent) {
+    let down = event.state.is_pressed();
+    match event.physical_key {
+        PhysicalKey::Code(KeyCode::KeyW) => inner.engine_state.set_key_down("w", down),
+        PhysicalKey::Code(KeyCode::KeyA) => inner.engine_state.set_key_down("a", down),
+        PhysicalKey::Code(KeyCode::KeyS) => inner.engine_state.set_key_down("s", down),
+        PhysicalKey::Code(KeyCode::KeyD) => inner.engine_state.set_key_down("d", down),
+        PhysicalKey::Code(KeyCode::Space) => inner.engine_state.set_key_down("space", down),
+        PhysicalKey::Code(KeyCode::ShiftLeft) | PhysicalKey::Code(KeyCode::ShiftRight) => {
+            inner.engine_state.set_key_down("shift", down)
+        }
+        _ => {}
+    }
+}
+
+fn preview_camera_forward(yaw: f32, pitch: f32) -> glam::Vec3 {
+    let (sy, cy) = pitch.sin_cos();
+    let (sx, cx) = yaw.sin_cos();
+    glam::Vec3::new(cx * cy, sy, sx * cy).normalize_or_zero()
 }
 
 fn note_engine_present(inner: &mut Inner) {
@@ -580,6 +608,9 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             sim_accum_s: 0.0,
             vsync_enabled_applied: project_vsync,
             device_events_always: false,
+            preview_orbiting: false,
+            preview_panning: false,
+            preview_last_cursor: None,
         });
 
         if let Some(i) = &self.inner {
@@ -626,6 +657,23 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                         draw_editor_ui(egui_ctx, &mut *model_ptr, Some(&mut *es_ptr));
                     }
                 });
+
+                if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                    // Keep editor edits visible in embedded viewport without requiring Play.
+                    let level = inner.model.level.clone();
+                    let asset_root = inner.model.project_root_dir();
+                    let saved_cam = (
+                        inner.engine_state.camera_pos,
+                        inner.engine_state.yaw,
+                        inner.engine_state.pitch,
+                    );
+                    inner
+                        .engine_state
+                        .apply_level_with_asset_root(&level, asset_root.as_deref());
+                    inner.engine_state.camera_pos = saved_cam.0;
+                    inner.engine_state.yaw = saved_cam.1;
+                    inner.engine_state.pitch = saved_cam.2;
+                }
 
                 // Apply play-mode input capture transitions requested by UI state.
                 if inner.model.play_mode_capture_request {
@@ -781,6 +829,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             }
 
             if let WindowEvent::KeyboardInput { event, .. } = &event {
+                apply_movement_key(inner, event);
                 if event.state.is_pressed()
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
                     && (inner.model.play_mode_active || inner.engine_input_captured)
@@ -853,6 +902,30 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     inner.engine_state.on_cursor_moved(position.x, position.y);
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        if let Some((lx, ly)) = inner.preview_last_cursor {
+                            let dx = (position.x - lx) as f32;
+                            let dy = (position.y - ly) as f32;
+                            if inner.preview_orbiting {
+                                inner.engine_state.yaw += dx * 0.005;
+                                inner.engine_state.pitch =
+                                    (inner.engine_state.pitch - dy * 0.005).clamp(-1.5, 1.5);
+                                inner.gl_win.window().request_redraw();
+                            } else if inner.preview_panning {
+                                let f = preview_camera_forward(
+                                    inner.engine_state.yaw,
+                                    inner.engine_state.pitch,
+                                );
+                                let right = f.cross(glam::Vec3::Y).normalize_or_zero();
+                                let up = glam::Vec3::Y;
+                                let pan_speed = 0.02;
+                                inner.engine_state.camera_pos -= right * dx * pan_speed;
+                                inner.engine_state.camera_pos += up * dy * pan_speed;
+                                inner.gl_win.window().request_redraw();
+                            }
+                        }
+                        inner.preview_last_cursor = Some((position.x, position.y));
+                    }
                     if inner.model.play_mode_active {
                         debug!(
                             target: "vge_embedded",
@@ -862,7 +935,39 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                         );
                     }
                 }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        match button {
+                            MouseButton::Middle => {
+                                inner.preview_orbiting = state.is_pressed();
+                                if !inner.preview_orbiting {
+                                    inner.preview_last_cursor = None;
+                                }
+                            }
+                            MouseButton::Right => {
+                                inner.preview_panning = state.is_pressed();
+                                if !inner.preview_panning {
+                                    inner.preview_last_cursor = None;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        let scroll = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => y,
+                            MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
+                        };
+                        let f =
+                            preview_camera_forward(inner.engine_state.yaw, inner.engine_state.pitch);
+                        inner.engine_state.camera_pos += f * scroll * 1.5;
+                        inner.gl_win.window().request_redraw();
+                    }
+                }
                 WindowEvent::KeyboardInput { event, .. } => {
+                    apply_movement_key(inner, &event);
                     if event.state.is_pressed()
                         && matches!(event.logical_key, Key::Named(NamedKey::Escape))
                         && (inner.model.play_mode_active || inner.engine_input_captured)
@@ -935,6 +1040,17 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             return;
         }
         set_device_event_mode(event_loop, inner, false);
+
+        if inner.model.preview_mode_active {
+            inner.gl_win.window().request_redraw();
+            if inner.engine_window.is_visible().unwrap_or(true) {
+                render_engine_frame(inner);
+                note_engine_present(inner);
+                inner.engine_window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
 
         if inner.repaint_delay.is_zero() {
             inner.gl_win.window().request_redraw();

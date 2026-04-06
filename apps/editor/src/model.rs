@@ -1,6 +1,7 @@
 //! Shared editor document state (eframe and embedded runners).
 
 use scene::{AssetKind, AssetRecord, CameraAuthoring, Level, PlacedObject, ProjectDocument};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -13,6 +14,65 @@ pub enum EditorMainTab {
     #[default]
     Level,
     Assets,
+    ModelEditor,
+}
+
+#[derive(Debug, Clone)]
+pub struct VoxelCell {
+    pub x: u8,
+    pub y: u8,
+    pub z: u8,
+    pub color_index: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct VoxelModelEditorState {
+    pub edge: u8,
+    pub sphere_radius: u8,
+    pub color_index: u8,
+    pub voxels: Vec<VoxelCell>,
+    pub export_name: String,
+    pub active_tool: VoxelPaintTool,
+    pub active_plane: VoxelEditPlane,
+    pub active_layer: u8,
+    pub orbit_yaw: f32,
+    pub orbit_pitch: f32,
+    pub camera_distance: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelPaintTool {
+    Paint,
+    Erase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelEditPlane {
+    XY,
+    XZ,
+    YZ,
+}
+
+impl Default for VoxelModelEditorState {
+    fn default() -> Self {
+        Self {
+            edge: 8,
+            sphere_radius: 4,
+            color_index: 200,
+            voxels: Vec::new(),
+            export_name: "model.vox".into(),
+            active_tool: VoxelPaintTool::Paint,
+            active_plane: VoxelEditPlane::XY,
+            active_layer: 0,
+            orbit_yaw: -0.6,
+            orbit_pitch: -0.4,
+            camera_distance: 28.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -78,12 +138,15 @@ pub struct EditorModel {
     pub asset_browser_new_folder_name: String,
     pub selected_instance: Option<u64>,
     pub main_tab: EditorMainTab,
+    pub voxel_model_editor: VoxelModelEditorState,
     /// Embedded only: last engine viewport in **physical pixels** (x, y, w, h) relative to the editor window client origin.
     pub engine_viewport_px: Option<(i32, i32, u32, u32)>,
     /// Embedded: set after Play applies the level so the winit loop uses `Poll` instead of `WaitUntil` (which can defer the engine redraw).
     pub pending_engine_repaint: bool,
     /// Embedded play mode: when true, engine view should capture input and stay foreground.
     pub play_mode_active: bool,
+    /// Embedded preview mode: when true, editor applies level edits continuously to runtime.
+    pub preview_mode_active: bool,
     /// Embedded one-shot request: focus engine window + acquire input capture.
     pub play_mode_capture_request: bool,
     /// Embedded runtime metric: rendered engine FPS (smoothed over ~0.5s windows).
@@ -117,9 +180,11 @@ impl EditorModel {
             asset_browser_new_folder_name: String::new(),
             selected_instance: None,
             main_tab: EditorMainTab::default(),
+            voxel_model_editor: VoxelModelEditorState::default(),
             engine_viewport_px: None,
             pending_engine_repaint: false,
             play_mode_active: false,
+            preview_mode_active: true,
             play_mode_capture_request: false,
             render_fps: 0.0,
             prefs_last_refresh: Instant::now(),
@@ -270,6 +335,16 @@ impl EditorModel {
     }
 
     pub fn open_asset_file(&mut self, abs_path: &Path) -> Result<(), String> {
+        if abs_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("vox"))
+            .unwrap_or(false)
+        {
+            self.load_model_editor_from_vox(abs_path)?;
+            self.main_tab = EditorMainTab::ModelEditor;
+            return Ok(());
+        }
         self.refresh_preferences_from_disk();
         if self.preferences.use_internal_editor_by_default {
             self.open_file_in_internal_editor(abs_path)
@@ -496,6 +571,9 @@ impl EditorModel {
             if o.script_asset_id.as_deref() == Some(asset_id) {
                 o.script_asset_id = None;
             }
+            if o.model_asset_id.as_deref() == Some(asset_id) {
+                o.model_asset_id = None;
+            }
         }
         self.sync_project_assets_from_level();
     }
@@ -554,12 +632,262 @@ impl EditorModel {
             prefab_id,
             name: format!("{base_name} {id}"),
             position: [0.0, 2.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
             visible: true,
             camera,
             script_asset_id: None,
+            model_asset_id: None,
         });
         self.selected_instance = Some(id);
         self.push_log(format!("Added {base_name} (instance {id})."));
+    }
+
+    pub fn generate_model_cube(&mut self) {
+        let edge = self.voxel_model_editor.edge.max(1);
+        let color = self.voxel_model_editor.color_index.max(1);
+        self.voxel_model_editor.voxels.clear();
+        for z in 0..edge {
+            for y in 0..edge {
+                for x in 0..edge {
+                    self.voxel_model_editor.voxels.push(VoxelCell {
+                        x,
+                        y,
+                        z,
+                        color_index: color,
+                    });
+                }
+            }
+        }
+        self.push_log(format!(
+            "Model editor: generated cube {}^3 ({} voxels).",
+            edge,
+            self.voxel_model_editor.voxels.len()
+        ));
+    }
+
+    pub fn generate_model_sphere(&mut self) {
+        let edge = self.voxel_model_editor.edge.max(3);
+        let radius = self.voxel_model_editor.sphere_radius.max(1) as f32;
+        let color = self.voxel_model_editor.color_index.max(1);
+        let c = (edge as f32 - 1.0) * 0.5;
+        self.voxel_model_editor.voxels.clear();
+        for z in 0..edge {
+            for y in 0..edge {
+                for x in 0..edge {
+                    let dx = x as f32 - c;
+                    let dy = y as f32 - c;
+                    let dz = z as f32 - c;
+                    if dx * dx + dy * dy + dz * dz <= radius * radius {
+                        self.voxel_model_editor.voxels.push(VoxelCell {
+                            x,
+                            y,
+                            z,
+                            color_index: color,
+                        });
+                    }
+                }
+            }
+        }
+        self.push_log(format!(
+            "Model editor: generated sphere r={} ({} voxels).",
+            radius as u32,
+            self.voxel_model_editor.voxels.len()
+        ));
+    }
+
+    pub fn clear_model_voxels(&mut self) {
+        self.voxel_model_editor.voxels.clear();
+    }
+
+    pub fn paint_model_voxel(&mut self, x: u8, y: u8, z: u8) {
+        let edge = self.voxel_model_editor.edge.max(1);
+        if x >= edge || y >= edge || z >= edge {
+            return;
+        }
+        if let Some(existing) = self
+            .voxel_model_editor
+            .voxels
+            .iter_mut()
+            .find(|v| v.x == x && v.y == y && v.z == z)
+        {
+            existing.color_index = self.voxel_model_editor.color_index.max(1);
+            return;
+        }
+        self.voxel_model_editor.voxels.push(VoxelCell {
+            x,
+            y,
+            z,
+            color_index: self.voxel_model_editor.color_index.max(1),
+        });
+    }
+
+    pub fn erase_model_voxel(&mut self, x: u8, y: u8, z: u8) {
+        self.voxel_model_editor
+            .voxels
+            .retain(|v| !(v.x == x && v.y == y && v.z == z));
+    }
+
+    pub fn export_model_vox_dialog(&mut self) -> Result<Option<String>, String> {
+        if self.voxel_model_editor.voxels.is_empty() {
+            return Err("model editor has no voxels to export".into());
+        }
+        let mut dialog = rfd::FileDialog::new().add_filter("MagicaVoxel", &["vox"]);
+        if let Some(root) = self.project_root_dir() {
+            dialog = dialog.set_directory(root.join("assets"));
+        }
+        let default_name = if self.voxel_model_editor.export_name.trim().is_empty() {
+            "model.vox"
+        } else {
+            self.voxel_model_editor.export_name.trim()
+        };
+        let Some(path) = dialog.set_file_name(default_name).save_file() else {
+            return Ok(None);
+        };
+        let asset_id = self.export_model_vox_to_path(&path)?;
+        Ok(Some(asset_id))
+    }
+
+    fn export_model_vox_to_path(&mut self, path: &Path) -> Result<String, String> {
+        let bytes = build_magica_vox_bytes(&self.voxel_model_editor.voxels)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        std::fs::write(path, &bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
+        let _ = dot_vox::load_bytes(&bytes)
+            .map_err(|e| format!("exported VOX validation failed for {}: {e}", path.display()))?;
+        self.voxel_model_editor.export_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model.vox")
+            .to_string();
+        let asset_id = self.ensure_vox_asset_for_path(path)?;
+        self.push_log(format!("Exported model VOX: {}", path.display()));
+        Ok(asset_id)
+    }
+
+    fn ensure_vox_asset_for_path(&mut self, path: &Path) -> Result<String, String> {
+        let abs = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let stored_path = if let Some(root) = self.project_root_dir() {
+            scene::make_project_relative_path(&root, &abs)
+                .map_err(|e| format!("VOX outside project root: {e}"))?
+        } else {
+            abs.to_string_lossy().into_owned()
+        };
+        if let Some(existing) = self
+            .level
+            .assets
+            .iter()
+            .find(|a| a.kind == AssetKind::Vox && a.path == stored_path)
+        {
+            return Ok(existing.id.clone());
+        }
+        let id = Uuid::new_v4().to_string();
+        let name = abs
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model")
+            .to_string();
+        self.level.assets.push(AssetRecord {
+            id: id.clone(),
+            name,
+            kind: AssetKind::Vox,
+            path: stored_path,
+        });
+        self.sync_project_assets_from_level();
+        Ok(id)
+    }
+
+    pub fn add_user_model_from_dialog(&mut self) -> Result<(), String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("MagicaVoxel", &["vox"]);
+        if let Some(root) = self.project_root_dir() {
+            dialog = dialog.set_directory(root.join("assets"));
+        }
+        let Some(path) = dialog.pick_file() else {
+            return Ok(());
+        };
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        dot_vox::load_bytes(&bytes)
+            .map_err(|e| format!("{}: invalid MagicaVoxel .vox: {e}", path.display()))?;
+        let asset_id = self.ensure_vox_asset_for_path(&path)?;
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("User Model")
+            .to_string();
+        self.add_model_instance(&asset_id, &name)?;
+        Ok(())
+    }
+
+    pub fn add_model_instance(&mut self, model_asset_id: &str, base_name: &str) -> Result<(), String> {
+        let rec = self
+            .level
+            .assets
+            .iter()
+            .find(|a| a.id == model_asset_id)
+            .ok_or_else(|| "model asset id not found".to_string())?;
+        if rec.kind != AssetKind::Vox {
+            return Err("asset is not a VOX model".into());
+        }
+        let id = self.next_instance_id;
+        self.next_instance_id += 1;
+        self.level.objects.push(PlacedObject {
+            instance_id: id,
+            prefab_id: scene::ids::CUBE,
+            name: format!("{base_name} {id}"),
+            position: [0.0, 2.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
+            visible: true,
+            camera: None,
+            script_asset_id: None,
+            model_asset_id: Some(model_asset_id.to_string()),
+        });
+        self.selected_instance = Some(id);
+        self.push_log(format!("Added model instance {base_name} (instance {id})."));
+        Ok(())
+    }
+
+    pub fn load_model_editor_from_vox(&mut self, path: &Path) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let file = dot_vox::load_bytes(&bytes)
+            .map_err(|e| format!("{}: invalid MagicaVoxel .vox: {e}", path.display()))?;
+        let model = file
+            .models
+            .first()
+            .ok_or_else(|| format!("{}: no model data in VOX file", path.display()))?;
+        let edge = model
+            .size
+            .x
+            .max(model.size.y)
+            .max(model.size.z)
+            .clamp(1, 64) as u8;
+        self.voxel_model_editor.edge = edge;
+        self.voxel_model_editor.active_layer = 0;
+        self.voxel_model_editor.voxels.clear();
+        for v in &model.voxels {
+            if v.x < edge && v.y < edge && v.z < edge {
+                self.voxel_model_editor.voxels.push(VoxelCell {
+                    x: v.x,
+                    y: v.y,
+                    z: v.z,
+                    color_index: v.i.max(1),
+                });
+            }
+        }
+        self.voxel_model_editor.export_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model.vox")
+            .to_string();
+        self.push_log(format!(
+            "Loaded VOX into model editor: {} ({} voxels)",
+            path.display(),
+            self.voxel_model_editor.voxels.len()
+        ));
+        Ok(())
     }
 
     pub fn recompute_next_id(&mut self) {
@@ -873,5 +1201,91 @@ impl EditorModel {
         out.sort();
         out.dedup();
         out
+    }
+}
+
+fn build_magica_vox_bytes(voxels: &[VoxelCell]) -> Result<Vec<u8>, String> {
+    if voxels.is_empty() {
+        return Err("cannot export an empty voxel model".into());
+    }
+    if voxels.len() > u32::MAX as usize {
+        return Err("too many voxels for VOX format".into());
+    }
+    let mut unique = BTreeSet::new();
+    let mut max_x = 0u8;
+    let mut max_y = 0u8;
+    let mut max_z = 0u8;
+    for v in voxels {
+        unique.insert((v.x, v.y, v.z, v.color_index.max(1)));
+        max_x = max_x.max(v.x);
+        max_y = max_y.max(v.y);
+        max_z = max_z.max(v.z);
+    }
+    let unique_voxels: Vec<(u8, u8, u8, u8)> = unique.into_iter().collect();
+
+    fn le_u32(dst: &mut Vec<u8>, v: u32) {
+        dst.extend_from_slice(&v.to_le_bytes());
+    }
+    fn push_chunk(dst: &mut Vec<u8>, id: &[u8; 4], content: &[u8], children: &[u8]) {
+        dst.extend_from_slice(id);
+        le_u32(dst, content.len() as u32);
+        le_u32(dst, children.len() as u32);
+        dst.extend_from_slice(content);
+        dst.extend_from_slice(children);
+    }
+
+    let mut size_content = Vec::with_capacity(12);
+    le_u32(&mut size_content, u32::from(max_x) + 1);
+    le_u32(&mut size_content, u32::from(max_y) + 1);
+    le_u32(&mut size_content, u32::from(max_z) + 1);
+
+    let mut xyzi_content = Vec::with_capacity(4 + unique_voxels.len() * 4);
+    le_u32(&mut xyzi_content, unique_voxels.len() as u32);
+    for (x, y, z, ci) in unique_voxels {
+        xyzi_content.extend_from_slice(&[x, y, z, ci]);
+    }
+
+    let mut rgba_content = Vec::with_capacity(256 * 4);
+    for i in 0..256u16 {
+        let c = i as u8;
+        rgba_content.extend_from_slice(&[c, c, c, 255]);
+    }
+
+    let mut children = Vec::new();
+    push_chunk(&mut children, b"SIZE", &size_content, &[]);
+    push_chunk(&mut children, b"XYZI", &xyzi_content, &[]);
+    push_chunk(&mut children, b"RGBA", &rgba_content, &[]);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"VOX ");
+    out.extend_from_slice(&150u32.to_le_bytes());
+    push_chunk(&mut out, b"MAIN", &[], &children);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod vox_tests {
+    use super::*;
+
+    #[test]
+    fn writes_valid_vox_bytes() {
+        let voxels = vec![
+            VoxelCell {
+                x: 0,
+                y: 0,
+                z: 0,
+                color_index: 1,
+            },
+            VoxelCell {
+                x: 1,
+                y: 0,
+                z: 0,
+                color_index: 2,
+            },
+        ];
+        let bytes = build_magica_vox_bytes(&voxels).expect("export bytes");
+        let file = dot_vox::load_bytes(&bytes).expect("parse exported bytes");
+        assert_eq!(file.models.len(), 1);
+        assert_eq!(file.models[0].voxels.len(), 2);
     }
 }

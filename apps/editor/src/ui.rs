@@ -1,7 +1,9 @@
 //! egui layout shared between eframe and embedded runners.
 
 use crate::launcher;
-use crate::model::{EditorMainTab, EditorModel, FpsOverlayCorner};
+use crate::model::{
+    EditorMainTab, EditorModel, FpsOverlayCorner, VoxelEditPlane, VoxelPaintTool,
+};
 use eframe::egui;
 use eframe::egui::{
     menu, Button, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke,
@@ -138,6 +140,7 @@ pub fn draw_editor_ui(
         ui.horizontal(|ui| {
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Level, "Level");
             ui.selectable_value(&mut model.main_tab, EditorMainTab::Assets, "Assets");
+            ui.selectable_value(&mut model.main_tab, EditorMainTab::ModelEditor, "Model Editor");
         });
     });
 
@@ -181,6 +184,16 @@ pub fn draw_editor_ui(
                         }
                     }
                 });
+            }
+            ui.separator();
+            ui.label(egui::RichText::new("Custom").weak());
+            if ui.button("User Model").clicked() {
+                if let Err(e) = model.add_user_model_from_dialog() {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                } else {
+                    model.status.clear();
+                }
             }
         });
 
@@ -232,6 +245,22 @@ pub fn draw_editor_ui(
                         ui.label("z");
                         ui.add(egui::DragValue::new(&mut o.position[2]).speed(0.1));
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("sx");
+                        ui.add(egui::DragValue::new(&mut o.scale[0]).speed(0.05).range(0.001..=1000.0));
+                        ui.label("sy");
+                        ui.add(egui::DragValue::new(&mut o.scale[1]).speed(0.05).range(0.001..=1000.0));
+                        ui.label("sz");
+                        ui.add(egui::DragValue::new(&mut o.scale[2]).speed(0.05).range(0.001..=1000.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("rx");
+                        ui.add(egui::DragValue::new(&mut o.rotation[0]).speed(0.02));
+                        ui.label("ry");
+                        ui.add(egui::DragValue::new(&mut o.rotation[1]).speed(0.02));
+                        ui.label("rz");
+                        ui.add(egui::DragValue::new(&mut o.rotation[2]).speed(0.02));
+                    });
                     ui.checkbox(&mut o.visible, "visible");
 
                     ui.separator();
@@ -269,8 +298,40 @@ pub fn draw_editor_ui(
                     if ui.button("Browse script…").clicked() {
                         browse_script = true;
                     }
+                    ui.separator();
+                    ui.label("Model (VOX asset)");
+                    let vox_assets: Vec<(String, String)> = model
+                        .level
+                        .assets
+                        .iter()
+                        .filter(|a| a.kind == AssetKind::Vox)
+                        .map(|a| (a.id.clone(), a.name.clone()))
+                        .collect();
+                    let selected_model_label = o
+                        .model_asset_id
+                        .as_deref()
+                        .and_then(|sid| model.level.assets.iter().find(|a| a.id == sid))
+                        .filter(|a| a.kind == AssetKind::Vox)
+                        .map(|a| a.name.as_str())
+                        .unwrap_or("Built-in prefab");
+                    egui::ComboBox::from_id_salt("obj_model_asset")
+                        .selected_text(selected_model_label)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(o.model_asset_id.is_none(), "Built-in prefab")
+                                .clicked()
+                            {
+                                o.model_asset_id = None;
+                            }
+                            for (id, name) in &vox_assets {
+                                let chosen = o.model_asset_id.as_deref() == Some(id.as_str());
+                                if ui.selectable_label(chosen, name).clicked() {
+                                    o.model_asset_id = Some(id.clone());
+                                }
+                            }
+                        });
 
-                    if o.prefab_id == ids::CAMERA {
+                    if o.prefab_id == ids::CAMERA || o.camera.is_some() {
                         let cam = o.camera.get_or_insert_with(Default::default);
                         ui.separator();
                         ui.label("Camera rig");
@@ -286,6 +347,8 @@ pub fn draw_editor_ui(
                             ui.add(egui::DragValue::new(&mut cam.pitch_deg).speed(0.5));
                         });
                         ui.checkbox(&mut cam.active, "active (first active wins)");
+                    } else if ui.button("Attach camera rig").clicked() {
+                        o.camera = Some(Default::default());
                     }
                 }
                 if let Some(new_sel) = assign_script {
@@ -346,6 +409,12 @@ pub fn draw_editor_ui(
                 model.engine_viewport_px = None;
             }
             draw_assets_tab(ui, model);
+        }
+        EditorMainTab::ModelEditor => {
+            if embedded.is_some() {
+                model.engine_viewport_px = None;
+            }
+            draw_model_editor_tab(ui, model);
         }
     });
 
@@ -413,6 +482,13 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
             "Frameless 3D view is embedded in the center (child window). File ▶ Open/Save. ▶ Play applies in-process.",
         )
         .weak());
+        ui.label(
+            egui::RichText::new(
+                "Preview controls: mouse wheel = zoom, middle-drag = orbit, right-drag = pan.",
+            )
+            .small()
+            .weak(),
+        );
     }
     ui.separator();
 
@@ -490,6 +566,7 @@ fn draw_level_tab(ui: &mut egui::Ui, model: &mut EditorModel, embedded: Option<&
             }
         }
         if is_embedded {
+            ui.checkbox(&mut model.preview_mode_active, "Preview");
             let play = if model.play_mode_active {
                 "■ Stop"
             } else {
@@ -633,6 +710,19 @@ fn draw_assets_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
                 ui.label(format!("{:?}", a.kind));
                 ui.label(&a.name);
                 ui.label(egui::RichText::new(&a.path).small().weak());
+                if a.kind == AssetKind::Vox && ui.button("Add to scene").clicked() {
+                    let label = if a.name.trim().is_empty() {
+                        "Model"
+                    } else {
+                        a.name.as_str()
+                    };
+                    if let Err(e) = model.add_model_instance(&a.id, label) {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    } else {
+                        model.status.clear();
+                    }
+                }
                 if ui.button("Remove").clicked() {
                     model.remove_asset_by_id(&a.id);
                 }
@@ -740,4 +830,65 @@ fn draw_code_editor_window(ctx: &egui::Context, model: &mut EditorModel) {
             }
         });
     model.code_editor_open = open;
+}
+
+fn draw_model_editor_tab(ui: &mut egui::Ui, model: &mut EditorModel) {
+    ui.heading("VOX Model Editor");
+    ui.label(
+        egui::RichText::new(
+            "Generate base voxel prefabs and export MagicaVoxel .vox assets into the project.",
+        )
+        .weak(),
+    );
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label("Model edge");
+        ui.add(egui::DragValue::new(&mut model.voxel_model_editor.edge).range(1..=64));
+        ui.label("Sphere radius");
+        ui.add(egui::DragValue::new(&mut model.voxel_model_editor.sphere_radius).range(1..=32));
+        ui.label("Color index");
+        ui.add(egui::DragValue::new(&mut model.voxel_model_editor.color_index).range(1..=255));
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Generate Cube").clicked() {
+            model.generate_model_cube();
+        }
+        if ui.button("Generate Sphere (cubes)").clicked() {
+            model.generate_model_sphere();
+        }
+        if ui.button("Clear").clicked() {
+            model.clear_model_voxels();
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Export name");
+        ui.text_edit_singleline(&mut model.voxel_model_editor.export_name);
+        if ui.button("Export .vox…").clicked() {
+            match model.export_model_vox_dialog() {
+                Ok(Some(asset_id)) => {
+                    let name = model
+                        .level
+                        .assets
+                        .iter()
+                        .find(|a| a.id == asset_id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| "Model".to_string());
+                    if let Err(e) = model.add_model_instance(&asset_id, &name) {
+                        model.status.clone_from(&e);
+                        model.push_log(e);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    model.status.clone_from(&e);
+                    model.push_log(e);
+                }
+            }
+        }
+    });
+    ui.separator();
+    ui.label(format!(
+        "Current voxel count: {}",
+        model.voxel_model_editor.voxels.len()
+    ));
 }

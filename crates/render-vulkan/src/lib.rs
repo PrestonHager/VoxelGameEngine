@@ -16,7 +16,7 @@ use winit::window::Window;
 
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 /// Max instanced draws per frame (uniform buffer path).
-pub const MAX_INSTANCES: usize = 16_384;
+pub const MAX_INSTANCES: usize = 524_288;
 
 static MESH_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.spv"));
 
@@ -670,7 +670,7 @@ impl VulkanRenderer {
 
         let v_size = (verts.len() * size_of::<Vertex>()) as u64;
         let i_size = (idx.len() * size_of::<u32>()) as u64;
-        let inst_size = (MAX_INSTANCES * size_of::<[f32; 6]>()) as u64;
+        let inst_size = (MAX_INSTANCES * size_of::<[f32; 9]>()) as u64;
 
         let (vb, vm) = create_buffer(
             &self.device,
@@ -774,7 +774,7 @@ impl VulkanRenderer {
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: (size_of::<f32>() * 6) as u32,
+                stride: (size_of::<f32>() * 9) as u32,
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -802,6 +802,12 @@ impl VulkanRenderer {
                 binding: 1,
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: 12,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 4,
+                binding: 1,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 24,
             },
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -1062,7 +1068,7 @@ impl VulkanRenderer {
     /// Vulkan handles on `self` must remain valid; caller must not destroy the swapchain or device concurrently.
     pub unsafe fn draw_frame(
         &mut self,
-        instance_data: &[[f32; 6]],
+        instance_data: &[[f32; 9]],
         view_proj: Mat4,
     ) -> Result<(), RenderError> {
         let frame = self.current_frame;
@@ -1088,7 +1094,7 @@ impl VulkanRenderer {
         let image_index = image_index as usize;
 
         let inst_n = instance_data.len().min(MAX_INSTANCES);
-        let inst_bytes = inst_n * size_of::<[f32; 6]>();
+        let inst_bytes = inst_n * size_of::<[f32; 9]>();
         if inst_n > 0 {
             let ptr = self.device.map_memory(
                 self.instance_mem,
@@ -1096,7 +1102,7 @@ impl VulkanRenderer {
                 inst_bytes as u64,
                 vk::MemoryMapFlags::empty(),
             )?;
-            std::ptr::copy_nonoverlapping(instance_data.as_ptr(), ptr as *mut [f32; 6], inst_n);
+            std::ptr::copy_nonoverlapping(instance_data.as_ptr(), ptr as *mut [f32; 9], inst_n);
             self.device.unmap_memory(self.instance_mem);
         }
 
