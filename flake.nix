@@ -1,8 +1,8 @@
 {
   description = "Voxel game engine - VGE Editor (Nix overlay + packages)";
 
-  # Flakes read only git-tracked files from this repo. Add `flake.nix` and `nix/` (git add),
-  # then run `nix flake lock` once to pin `nixpkgs` and produce `flake.lock`.
+  # Flakes read only git-tracked files from this repo. `flake.lock` pins `nixpkgs`; run
+  # `nix flake update` when you want to advance the nixpkgs input.
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

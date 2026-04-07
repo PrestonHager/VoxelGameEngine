@@ -48,10 +48,7 @@ rustPlatform.buildRustPackage {
     makeWrapper
   ];
 
-  buildInputs = [
-    vulkan-headers
-    vulkan-loader
-  ] ++ runtimeLibs;
+  buildInputs = [ vulkan-headers ] ++ runtimeLibs;
 
   postInstall = ''
     mv "$out/bin/editor" "$out/bin/vge-editor"

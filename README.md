@@ -14,6 +14,72 @@ cargo build --workspace
 cargo run -p editor -- engine-runner
 ```
 
+## Nix (overlay and flake)
+
+The repo ships a Nix **overlay** that exposes **`pkgs.vge-editor`** (the editor binary as **`vge-editor`**, plus a `.desktop` entry). Builds are **Linux-only** (`x86_64-linux`, `aarch64-linux`). **`flake.lock`** pins **`nixpkgs`**; run **`nix flake update`** when you want to move to a newer nixpkgs.
+
+### This repository as a flake
+
+From a checkout of this repo (flake inputs must be **git-tracked**):
+
+| Command | Purpose |
+|---------|---------|
+| `nix build` / `nix build .#vge-editor` | Build the editor package |
+| `nix run` | Run **`vge-editor`** |
+| `nix develop` | Dev shell with the same build inputs as the package plus Rust tools |
+
+### Use the overlay from another flake
+
+Add this repo as an input and apply **`overlays.default`**, then install **`vge-editor`**:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    vge.url = "github:PrestonHager/VoxelGameEngine"; # or git+file:… for a local checkout
+  };
+
+  outputs = { self, nixpkgs, vge, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ vge.overlays.default ];
+      };
+    in
+    {
+      packages.${system}.default = pkgs.vge-editor;
+    };
+}
+```
+
+On **NixOS** or **Home Manager**, use the same overlay list under **`nixpkgs.overlays`** and add **`vge-editor`** to **`environment.systemPackages`** or **`home.packages`**.
+
+### NixOS (configuration without flakes)
+
+Point the module system at **`nix/overlay.nix`** (absolute path or a path relative to your config entry):
+
+```nix
+{ pkgs, ... }: {
+  nixpkgs.overlays = [
+    (import /path/to/VoxelGameEngine/nix/overlay.nix)
+  ];
+  environment.systemPackages = [ pkgs.vge-editor ];
+}
+```
+
+Rebuild and switch as usual (**`nixos-rebuild switch`**).
+
+### `nix-shell` / `nix shell` (no project flake)
+
+From the **repository root**:
+
+```bash
+nix-shell -E 'with import <nixpkgs> { overlays = [ (import ./nix/overlay.nix) ]; }; mkShell { packages = [ vge-editor ]; }'
+```
+
+See **`nix/overlay.nix`** for additional copy-paste examples.
+
 ## Editor (MVP)
 
 The **editor** (`apps/editor`) is a **single executable**: it hosts the UI and, in **embedded** mode (default), an in-process Vulkan view. For a **separate** engine window, run **`--no-embedded`** or start the same binary with the **`engine-runner`** subcommand (see below). If nothing is listening on the IPC port in external mode, the editor spawns **`editor engine-runner`** next to itself. **Push to engine** always saves first, then reloads the level file (IPC in external mode, in-process apply in embedded mode).

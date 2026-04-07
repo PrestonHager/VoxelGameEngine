@@ -9,6 +9,10 @@ on:
     paths-ignore:
       - "docs/**"
       - ".github/workflows/docs-pages.yml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
 
 concurrency:
   group: main-build-${{ github.sha }}
