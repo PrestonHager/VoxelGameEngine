@@ -4,7 +4,7 @@ Workspace layout matches [`agents.md`](agents.md): `ash`-based Vulkan rendering,
 
 ## Installation and Documentation
 
-Install via the latest [GitHub Release](/releases) for your platform, or build from source using the instructions below.
+Install via the latest [GitHub Release](https://github.com/PrestonHager/VoxelGameEngine/releases) for your platform, or build from source using the instructions below.
 
 Documentation can be found at [vge.prestonhager.com](https://vge.prestonhager.com) and is built from this repository.
 
