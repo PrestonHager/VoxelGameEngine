@@ -19,14 +19,17 @@ use egui_winit::winit;
 use engine_core::EngineState;
 use render_vulkan::{RenderError, VulkanRenderer};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event::{DeviceEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::raw_window_handle::HasWindowHandle;
+use winit::window::CursorGrabMode;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 #[derive(Debug)]
@@ -157,10 +160,7 @@ impl GlutinWindowContext {
 
         let gl_context = not_current_gl_context.make_current(&gl_surface).unwrap();
 
-        let _ = gl_surface.set_swap_interval(
-            &gl_context,
-            glutin::surface::SwapInterval::Wait(NonZeroU32::MIN),
-        );
+        let _ = gl_surface.set_swap_interval(&gl_context, glutin::surface::SwapInterval::DontWait);
 
         let inner_sz = window.inner_size();
         let scale = window.scale_factor();
@@ -205,22 +205,19 @@ impl GlutinWindowContext {
     }
 }
 
-/// Tick simulation and present one Vulkan frame to the engine window.
-fn paint_engine_frame(inner: &mut Inner) {
+/// Present one Vulkan frame to the engine window.
+fn render_engine_frame(inner: &mut Inner) {
     let win = inner.engine_window.as_ref();
     let sz = win.inner_size();
     if sz.width == 0 || sz.height == 0 {
         return;
     }
-    let now = Instant::now();
-    let dt = now.duration_since(inner.last_engine).as_secs_f32();
-    inner.last_engine = now;
-    let steps = ((dt * 60.0).floor() as u32).clamp(1, 5);
-    for _ in 0..steps {
-        inner.engine_state.tick();
-    }
     let aspect = sz.width as f32 / sz.height as f32;
-    let vp = inner.engine_state.view_projection(aspect);
+    let vp = if inner.model.preview_mode_active && !inner.model.play_mode_active {
+        inner.engine_state.free_view_projection(aspect)
+    } else {
+        inner.engine_state.view_projection(aspect)
+    };
     let inst = inner.engine_state.voxel_instances_for_stream();
     // SAFETY: draw uses the initialized swapchain for `win`.
     match unsafe { inner.vk.draw_frame(&inst, vp) } {
@@ -239,6 +236,29 @@ fn paint_engine_frame(inner: &mut Inner) {
             }
         }
         Err(e) => error!(target: "vge_embedded", error = %e, "engine vk.draw_frame failed"),
+    }
+}
+
+/// Advance simulation without presenting a Vulkan frame.
+///
+/// Used as a fallback heartbeat when the embedded engine viewport is hidden or
+/// not receiving redraw events, so scripts still run during Play mode.
+fn tick_engine_simulation(inner: &mut Inner) {
+    let now = Instant::now();
+    let dt = now
+        .duration_since(inner.last_engine)
+        .as_secs_f32()
+        .min(0.25);
+    inner.last_engine = now;
+    inner.sim_accum_s += dt;
+    let fixed_dt = 1.0 / 60.0;
+    let steps = ((inner.sim_accum_s / fixed_dt).floor() as u32).min(5);
+    if steps == 0 {
+        return;
+    }
+    inner.sim_accum_s -= steps as f32 * fixed_dt;
+    for _ in 0..steps {
+        inner.engine_state.tick();
     }
 }
 
@@ -263,6 +283,108 @@ struct Inner {
     /// After `paint_engine_frame` from the editor `RedrawRequested` path (e.g. Play), skip one
     /// redundant engine-window redraw so we do not tick/present twice in the same turn.
     skip_next_engine_redraw_paint: bool,
+    /// True when engine window currently has cursor/input capture.
+    engine_input_captured: bool,
+    debug_frame_counter: u64,
+    fps_window_start: Instant,
+    fps_window_frames: u32,
+    sim_accum_s: f32,
+    vsync_enabled_applied: bool,
+    device_events_always: bool,
+    preview_orbiting: bool,
+    preview_panning: bool,
+    preview_last_cursor: Option<(f64, f64)>,
+    preview_last_applied_level: Option<scene::Level>,
+    preview_last_applied_root: Option<PathBuf>,
+}
+
+fn set_engine_input_capture(inner: &mut Inner, capture: bool) {
+    let win = inner.engine_window.as_ref();
+    if capture {
+        win.focus_window();
+        // Some platforms/window modes (especially embedded/child windows) may
+        // support one grab mode but not the other; try both best-effort.
+        let locked_ok = win.set_cursor_grab(CursorGrabMode::Locked).is_ok();
+        let confined_ok = win.set_cursor_grab(CursorGrabMode::Confined).is_ok();
+        win.set_cursor_visible(false);
+        inner.engine_input_captured = locked_ok || confined_ok;
+        debug!(target: "vge_embedded", "engine input capture ENABLED");
+    } else {
+        let _ = win.set_cursor_grab(CursorGrabMode::None);
+        win.set_cursor_visible(true);
+        inner.engine_input_captured = false;
+        debug!(target: "vge_embedded", "engine input capture DISABLED");
+    }
+}
+
+fn set_device_event_mode(event_loop: &ActiveEventLoop, inner: &mut Inner, always: bool) {
+    if inner.device_events_always == always {
+        return;
+    }
+    event_loop.listen_device_events(if always {
+        DeviceEvents::Always
+    } else {
+        DeviceEvents::WhenFocused
+    });
+    inner.device_events_always = always;
+}
+
+fn apply_movement_key(inner: &mut Inner, event: &winit::event::KeyEvent) {
+    let down = event.state.is_pressed();
+    match event.physical_key {
+        PhysicalKey::Code(KeyCode::KeyW) => inner.engine_state.set_key_down("w", down),
+        PhysicalKey::Code(KeyCode::KeyA) => inner.engine_state.set_key_down("a", down),
+        PhysicalKey::Code(KeyCode::KeyS) => inner.engine_state.set_key_down("s", down),
+        PhysicalKey::Code(KeyCode::KeyD) => inner.engine_state.set_key_down("d", down),
+        PhysicalKey::Code(KeyCode::Space) => inner.engine_state.set_key_down("space", down),
+        PhysicalKey::Code(KeyCode::ShiftLeft) | PhysicalKey::Code(KeyCode::ShiftRight) => {
+            inner.engine_state.set_key_down("shift", down)
+        }
+        _ => {}
+    }
+}
+
+fn preview_camera_forward(yaw: f32, pitch: f32) -> glam::Vec3 {
+    let (sy, cy) = pitch.sin_cos();
+    let (sx, cx) = yaw.sin_cos();
+    glam::Vec3::new(cx * cy, sy, sx * cy).normalize_or_zero()
+}
+
+fn note_engine_present(inner: &mut Inner) {
+    inner.fps_window_frames = inner.fps_window_frames.saturating_add(1);
+    let elapsed = inner.fps_window_start.elapsed();
+    if elapsed.as_secs_f32() >= 0.5 {
+        let secs = elapsed.as_secs_f32().max(0.001);
+        inner.model.render_fps = inner.fps_window_frames as f32 / secs;
+        inner.fps_window_start = Instant::now();
+        inner.fps_window_frames = 0;
+    }
+}
+
+fn apply_script_cursor_commands(inner: &mut Inner) {
+    let cmds = inner.engine_state.take_cursor_commands();
+    if let Some(visible) = cmds.cursor_visible {
+        inner.engine_window.set_cursor_visible(visible);
+    }
+    if cmds.center_mouse {
+        let sz = inner.engine_window.inner_size();
+        if sz.width > 0 && sz.height > 0 {
+            let center = PhysicalPosition::new((sz.width / 2) as f64, (sz.height / 2) as f64);
+            let _ = inner.engine_window.set_cursor_position(center);
+            inner.engine_state.last_cursor_pos = None;
+        }
+    }
+}
+
+fn recenter_engine_cursor(inner: &mut Inner) {
+    let sz = inner.engine_window.inner_size();
+    if sz.width == 0 || sz.height == 0 {
+        return;
+    }
+    let center = PhysicalPosition::new((sz.width / 2) as f64, (sz.height / 2) as f64);
+    let _ = inner.engine_window.set_cursor_position(center);
+    // Avoid synthetic warp deltas affecting script look calculations.
+    inner.engine_state.last_cursor_pos = None;
 }
 
 struct EmbeddedApp {
@@ -282,7 +404,34 @@ impl EmbeddedApp {
 }
 
 impl ApplicationHandler<UserEvent> for EmbeddedApp {
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        let Some(inner) = &mut self.inner else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta } = event {
+            if inner.model.play_mode_active && inner.engine_input_captured {
+                inner.engine_state.on_mouse_motion(delta.0, delta.1);
+                debug!(
+                    target: "vge_embedded",
+                    dx = delta.0,
+                    dy = delta.1,
+                    "raw mouse motion (device event)"
+                );
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.listen_device_events(DeviceEvents::WhenFocused);
+        debug!(
+            target: "vge_embedded",
+            "device event mode set to WhenFocused"
+        );
         // SAFETY: `resumed` runs on the winit thread; GL context is created before use below.
         let gl_win = unsafe { GlutinWindowContext::new(event_loop) };
         let editor_id = gl_win.window().id();
@@ -408,7 +557,7 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             "engine window handle ready for Vulkan surface"
         );
         // SAFETY: `engine_window` is a valid Vulkan `HasWindowHandle` surface target.
-        let vk = match unsafe { VulkanRenderer::new(engine_window.as_ref()) } {
+        let mut vk = match unsafe { VulkanRenderer::new(engine_window.as_ref()) } {
             Ok(r) => {
                 info!(target: "vge_embedded", "VulkanRenderer initialized for embedded engine window");
                 r
@@ -422,6 +571,19 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
 
         let mut model = EditorModel::new(self.port);
         crate::editor_state::apply_loaded_session(&mut model);
+        let project_vsync = model
+            .current_project
+            .as_ref()
+            .map(|p| p.vsync_enabled)
+            .unwrap_or(false);
+        // SAFETY: renderer is initialized and bound to this engine window.
+        if let Err(e) = unsafe { vk.set_vsync_enabled(engine_window.as_ref(), project_vsync) } {
+            warn!(
+                target: "vge_embedded",
+                error = %e,
+                "failed to apply initial project VSync"
+            );
+        }
         model.push_log(
             "Embedded editor: use Play or File to run; the 3D view follows the central viewport.",
         );
@@ -442,6 +604,18 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
             engine_viewport_parent_relative,
             logged_missing_engine_viewport: false,
             skip_next_engine_redraw_paint: false,
+            engine_input_captured: false,
+            debug_frame_counter: 0,
+            fps_window_start: Instant::now(),
+            fps_window_frames: 0,
+            sim_accum_s: 0.0,
+            vsync_enabled_applied: project_vsync,
+            device_events_always: false,
+            preview_orbiting: false,
+            preview_panning: false,
+            preview_last_cursor: None,
+            preview_last_applied_level: None,
+            preview_last_applied_root: None,
         });
 
         if let Some(i) = &self.inner {
@@ -488,6 +662,63 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                         draw_editor_ui(egui_ctx, &mut *model_ptr, Some(&mut *es_ptr));
                     }
                 });
+
+                if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                    // Keep editor edits visible without rebuilding runtime state every frame.
+                    let level = inner.model.level.clone();
+                    let asset_root = inner.model.project_root_dir();
+                    let changed = inner.preview_last_applied_level.as_ref() != Some(&level)
+                        || inner.preview_last_applied_root.as_ref() != asset_root.as_ref();
+                    if changed {
+                        let saved_cam = (
+                            inner.engine_state.camera_pos,
+                            inner.engine_state.yaw,
+                            inner.engine_state.pitch,
+                        );
+                        inner
+                            .engine_state
+                            .apply_level_with_asset_root(&level, asset_root.as_deref());
+                        inner.engine_state.camera_pos = saved_cam.0;
+                        inner.engine_state.yaw = saved_cam.1;
+                        inner.engine_state.pitch = saved_cam.2;
+                        inner.preview_last_applied_level = Some(level);
+                        inner.preview_last_applied_root = asset_root;
+                    }
+                }
+
+                // Apply play-mode input capture transitions requested by UI state.
+                if inner.model.play_mode_capture_request {
+                    set_engine_input_capture(inner, true);
+                    inner.model.play_mode_capture_request = false;
+                } else if inner.engine_input_captured != inner.model.play_mode_active {
+                    set_engine_input_capture(inner, inner.model.play_mode_active);
+                }
+                let project_vsync = inner
+                    .model
+                    .current_project
+                    .as_ref()
+                    .map(|p| p.vsync_enabled)
+                    .unwrap_or(false);
+                if project_vsync != inner.vsync_enabled_applied {
+                    // SAFETY: same renderer/window pair; this recreates swapchain resources.
+                    match unsafe {
+                        inner
+                            .vk
+                            .set_vsync_enabled(inner.engine_window.as_ref(), project_vsync)
+                    } {
+                        Ok(()) => {
+                            inner.vsync_enabled_applied = project_vsync;
+                            inner.model.push_log(if project_vsync {
+                                "Project setting: VSync enabled."
+                            } else {
+                                "Project setting: VSync disabled (uncapped)."
+                            });
+                        }
+                        Err(e) => inner
+                            .model
+                            .push_log(format!("Failed to apply project VSync: {e}")),
+                    }
+                }
 
                 {
                     let eng = inner.engine_window.clone();
@@ -561,10 +792,24 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 // here so the 3D view updates immediately (same frame as the UI).
                 if inner.model.pending_engine_repaint {
                     inner.repaint_delay = std::time::Duration::ZERO;
-                    paint_engine_frame(inner);
+                    render_engine_frame(inner);
+                    note_engine_present(inner);
                     inner.model.pending_engine_repaint = false;
                     inner.skip_next_engine_redraw_paint = true;
                     inner.egui_glow.egui_ctx.request_repaint();
+                }
+                for line in inner.engine_state.drain_script_logs() {
+                    inner.model.push_log(format!("[lua] {line}"));
+                }
+                inner.debug_frame_counter = inner.debug_frame_counter.wrapping_add(1);
+                if inner.model.play_mode_active && inner.debug_frame_counter % 120 == 0 {
+                    debug!(
+                        target: "vge_embedded",
+                        frame = inner.debug_frame_counter,
+                        captured = inner.engine_input_captured,
+                        mouse_delta = ?inner.engine_state.mouse_delta,
+                        "embedded play heartbeat"
+                    );
                 }
 
                 // SAFETY: `gl` is bound to the current GL context for this window.
@@ -578,7 +823,11 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 let _ = inner.gl_win.swap_buffers();
                 inner.engine_window.request_redraw();
 
-                event_loop.set_control_flow(if inner.repaint_delay.is_zero() {
+                event_loop.set_control_flow(if inner.model.play_mode_active {
+                    inner.gl_win.window().request_redraw();
+                    inner.engine_window.request_redraw();
+                    ControlFlow::Poll
+                } else if inner.repaint_delay.is_zero() {
                     inner.gl_win.window().request_redraw();
                     ControlFlow::Poll
                 } else if let Some(t) = std::time::Instant::now().checked_add(inner.repaint_delay) {
@@ -588,6 +837,20 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                 });
 
                 return;
+            }
+
+            if let WindowEvent::KeyboardInput { event, .. } = &event {
+                apply_movement_key(inner, event);
+                if event.state.is_pressed()
+                    && matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                    && (inner.model.play_mode_active || inner.engine_input_captured)
+                {
+                    inner.model.stop_play_mode("Play mode stopped (Esc).");
+                    set_engine_input_capture(inner, false);
+                    inner.gl_win.window().request_redraw();
+                    inner.engine_window.request_redraw();
+                    return;
+                }
             }
 
             let response = inner
@@ -617,6 +880,12 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                     win.request_redraw();
                 }
                 WindowEvent::RedrawRequested => {
+                    if inner.model.play_mode_active {
+                        // Play mode uses a direct heartbeat in `about_to_wait` for both
+                        // simulation and rendering. Avoid double-presenting here.
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                        return;
+                    }
                     let sz = win.inner_size();
                     if sz.width > 0 && sz.height > 0 {
                         if inner.skip_next_engine_redraw_paint {
@@ -626,7 +895,8 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                                 "engine RedrawRequested skipped (already painted after Play in editor pass)"
                             );
                         } else {
-                            paint_engine_frame(inner);
+                            render_engine_frame(inner);
+                            note_engine_present(inner);
                         }
                     } else {
                         debug!(
@@ -637,6 +907,88 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
                     }
                     inner.gl_win.window().request_redraw();
                     win.request_redraw();
+                    if inner.model.play_mode_active {
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    inner.engine_state.on_cursor_moved(position.x, position.y);
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        if let Some((lx, ly)) = inner.preview_last_cursor {
+                            let dx = (position.x - lx) as f32;
+                            let dy = (position.y - ly) as f32;
+                            if inner.preview_orbiting {
+                                inner.engine_state.yaw += dx * 0.005;
+                                inner.engine_state.pitch =
+                                    (inner.engine_state.pitch - dy * 0.005).clamp(-1.5, 1.5);
+                                inner.gl_win.window().request_redraw();
+                            } else if inner.preview_panning {
+                                let f = preview_camera_forward(
+                                    inner.engine_state.yaw,
+                                    inner.engine_state.pitch,
+                                );
+                                let right = f.cross(glam::Vec3::Y).normalize_or_zero();
+                                let up = glam::Vec3::Y;
+                                let pan_speed = 0.02;
+                                inner.engine_state.camera_pos -= right * dx * pan_speed;
+                                inner.engine_state.camera_pos += up * dy * pan_speed;
+                                inner.gl_win.window().request_redraw();
+                            }
+                        }
+                        inner.preview_last_cursor = Some((position.x, position.y));
+                    }
+                    if inner.model.play_mode_active {
+                        debug!(
+                            target: "vge_embedded",
+                            x = position.x,
+                            y = position.y,
+                            "engine cursor moved (window event)"
+                        );
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        match button {
+                            MouseButton::Middle => {
+                                inner.preview_orbiting = state.is_pressed();
+                                if !inner.preview_orbiting {
+                                    inner.preview_last_cursor = None;
+                                }
+                            }
+                            MouseButton::Right => {
+                                inner.preview_panning = state.is_pressed();
+                                if !inner.preview_panning {
+                                    inner.preview_last_cursor = None;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    if inner.model.preview_mode_active && !inner.model.play_mode_active {
+                        let scroll = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => y,
+                            MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
+                        };
+                        let f = preview_camera_forward(
+                            inner.engine_state.yaw,
+                            inner.engine_state.pitch,
+                        );
+                        inner.engine_state.camera_pos += f * scroll * 1.5;
+                        inner.gl_win.window().request_redraw();
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } => {
+                    apply_movement_key(inner, &event);
+                    if event.state.is_pressed()
+                        && matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                        && (inner.model.play_mode_active || inner.engine_input_captured)
+                    {
+                        inner.model.stop_play_mode("Play mode stopped (Esc).");
+                        set_engine_input_capture(inner, false);
+                        inner.gl_win.window().request_redraw();
+                    }
                 }
                 _ => {}
             }
@@ -669,8 +1021,63 @@ impl ApplicationHandler<UserEvent> for EmbeddedApp {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(inner) = &mut self.inner else {
+            return;
+        };
+
+        if inner.model.play_mode_active {
+            set_device_event_mode(event_loop, inner, true);
+            // Keep capture sticky during play even if the OS/focus changes.
+            if !inner.engine_input_captured {
+                set_engine_input_capture(inner, true);
+            }
+            // Embedded child windows can lose confinement on some platforms;
+            // enforce hidden + centered cursor continuously during play.
+            inner.engine_window.set_cursor_visible(false);
+            recenter_engine_cursor(inner);
+            tick_engine_simulation(inner);
+            apply_script_cursor_commands(inner);
+            for line in inner.engine_state.drain_script_logs() {
+                inner.model.push_log(format!("[lua] {line}"));
+            }
+            // Keep both windows pumping while in Play/Capture mode, even if no
+            // external window events are arriving from the OS.
+            if inner.engine_window.is_visible().unwrap_or(true) {
+                render_engine_frame(inner);
+                note_engine_present(inner);
+                inner.engine_window.request_redraw();
+            }
+            inner.gl_win.window().request_redraw();
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
+        set_device_event_mode(event_loop, inner, false);
+
+        if inner.model.preview_mode_active {
+            inner.gl_win.window().request_redraw();
+            if inner.engine_window.is_visible().unwrap_or(true) {
+                render_engine_frame(inner);
+                note_engine_present(inner);
+                inner.engine_window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
+
+        if inner.repaint_delay.is_zero() {
+            inner.gl_win.window().request_redraw();
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else if let Some(t) = std::time::Instant::now().checked_add(inner.repaint_delay) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(t));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
+
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(mut inner) = self.inner.take() {
+            set_engine_input_capture(&mut inner, false);
             if let Err(e) = crate::editor_state::save_from_model(&inner.model) {
                 warn!("failed to save editor session: {e}");
             }

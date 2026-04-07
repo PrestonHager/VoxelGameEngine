@@ -10,7 +10,15 @@ result-*
 /.vscode
 *.spv.tmp
 
+# Documentation build
+/docs/_build
+
 # VGE files
 *.vge.json
 *.vge.json.gz
 *.vge
+
+*.zip
+# VGE project workspaces (folders that contain a .vge project file)
+# Add one entry per project root folder.
+Demo Project/

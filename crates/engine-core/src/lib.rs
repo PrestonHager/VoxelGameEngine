@@ -1,16 +1,76 @@
 //! Application loop: fixed-step ECS tick, camera, optional voxel mesh sampling for instances.
 
-use ecs::{CameraRig, Position, PrefabRef, Velocity, World};
+use ecs::{CameraRig, Position, PrefabRef, Rotation, Scale, Velocity, World};
 use glam::{IVec3, Mat4, Vec3};
 use meshing::dual_contouring::{extract_from_chunk_scalar, MeshBuffers};
 use physics::PhysicsWorld;
 use scene::{CameraAuthoring, Level, PlacedObject, TerrainLayer, TerrainMode};
-use scripting::ScriptHost;
+use scripting::{CursorCommands, ScriptHost, ScriptInput};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use voxel::{Chunk, ChunkWorld};
 
 const FIXED_DT: f32 = 1.0 / 60.0;
-const MAX_INSTANCES: usize = 16_384;
+const MAX_INSTANCES: usize = 524_288;
+const MAX_MODEL_VOXELS_PER_OBJECT: usize = 250_000;
+
+fn show_debug_terrain_points() -> bool {
+    std::env::var_os("VGE_SHOW_DEBUG_TERRAIN_POINTS").is_some()
+}
+
+fn spawn_model_voxels(
+    world: &mut World,
+    level: &Level,
+    obj: &PlacedObject,
+    asset_root: Option<&Path>,
+) -> Result<(usize, Option<ecs::Entity>), String> {
+    let Some(asset_id) = obj.model_asset_id.as_deref() else {
+        return Ok((0, None));
+    };
+    let path = level
+        .resolve_vox_asset_path_with_base(asset_id, asset_root)
+        .ok_or_else(|| format!("missing VOX asset id: {asset_id}"))?;
+    let bytes = fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let file = dot_vox::load_bytes(&bytes)
+        .map_err(|e| format!("parse VOX {}: {e}", path.to_string_lossy()))?;
+    let Some(model) = file.models.first() else {
+        return Ok((0, None));
+    };
+    let mut spawned = 0usize;
+    let mut first_entity: Option<ecs::Entity> = None;
+    let sx = obj.scale[0].max(0.0001);
+    let sy = obj.scale[1].max(0.0001);
+    let sz = obj.scale[2].max(0.0001);
+    let rot = glam::Quat::from_euler(
+        glam::EulerRot::XYZ,
+        obj.rotation[0],
+        obj.rotation[1],
+        obj.rotation[2],
+    );
+    for (i, v) in model.voxels.iter().enumerate() {
+        if i >= MAX_MODEL_VOXELS_PER_OBJECT {
+            tracing::warn!(
+                target: "engine_core",
+                "model voxel cap reached ({}), truncating '{}'",
+                MAX_MODEL_VOXELS_PER_OBJECT,
+                path.display()
+            );
+            break;
+        }
+        let local = Vec3::new(v.x as f32 * sx, v.y as f32 * sy, v.z as f32 * sz);
+        let world_pos = rot.mul_vec3(local) + Vec3::from_array(obj.position);
+        let p = world_pos;
+        let e = world.spawn_with(Position(p), None);
+        if first_entity.is_none() {
+            first_entity = Some(e);
+        }
+        let _ = world.set_scale(e, Scale(Vec3::new(sx, sy, sz)));
+        let _ = world.set_rotation(e, Rotation(Vec3::from_array(obj.rotation)));
+        spawned += 1;
+    }
+    Ok((spawned, first_entity))
+}
 
 pub struct EngineState {
     pub world: World,
@@ -25,6 +85,16 @@ pub struct EngineState {
     /// Maps level `instance_id` → ECS entity (for Lua hooks).
     pub entity_by_instance: HashMap<u64, ecs::Entity>,
     pub script: Option<ScriptHost>,
+    pub last_cursor_pos: Option<(f64, f64)>,
+    pub mouse_pos: Option<(f32, f32)>,
+    pub mouse_delta: (f32, f32),
+    pub key_w_down: bool,
+    pub key_a_down: bool,
+    pub key_s_down: bool,
+    pub key_d_down: bool,
+    pub key_space_down: bool,
+    pub key_shift_down: bool,
+    pub pending_cursor_commands: CursorCommands,
 }
 
 fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
@@ -54,6 +124,10 @@ fn apply_terrain_layer(vw: &mut ChunkWorld, terrain: &TerrainLayer) {
 
 impl EngineState {
     pub fn from_level(level: &Level) -> Self {
+        Self::from_level_with_asset_root(level, None)
+    }
+
+    pub fn from_level_with_asset_root(level: &Level, asset_root: Option<&Path>) -> Self {
         let mut world = World::default();
         let mut entity_by_instance = HashMap::new();
 
@@ -61,7 +135,7 @@ impl EngineState {
             if !o.visible {
                 continue;
             }
-            let e = if o.prefab_id == scene::ids::CAMERA {
+            let e = if o.prefab_id == scene::ids::CAMERA || o.camera.is_some() {
                 let rig = o
                     .camera
                     .as_ref()
@@ -74,12 +148,40 @@ impl EngineState {
                         active: c.active,
                     })
                     .unwrap_or_default();
-                world.spawn_camera(Position(Vec3::from_array(o.position)), rig)
+                let e = world.spawn_camera(Position(Vec3::from_array(o.position)), rig);
+                let _ = world.set_scale(e, Scale(Vec3::from_array(o.scale)));
+                let _ = world.set_rotation(e, Rotation(Vec3::from_array(o.rotation)));
+                e
+            } else if o.model_asset_id.is_some() {
+                let (count, first_entity) =
+                    match spawn_model_voxels(&mut world, level, o, asset_root) {
+                        Ok(x) => x,
+                        Err(err) => {
+                            tracing::warn!(target: "engine_core", "model spawn failed: {err}");
+                            (0, None)
+                        }
+                    };
+                if count == 0 {
+                    // Fallback for invalid/empty model assets so object still exists.
+                    let e = world.spawn_prefab(
+                        Position(Vec3::from_array(o.position)),
+                        PrefabRef(o.prefab_id),
+                    );
+                    let _ = world.set_scale(e, Scale(Vec3::from_array(o.scale)));
+                    let _ = world.set_rotation(e, Rotation(Vec3::from_array(o.rotation)));
+                    e
+                } else {
+                    // Bind scripts/instance mapping to first model voxel so no extra root cube is rendered.
+                    first_entity.expect("count>0 implies at least one entity")
+                }
             } else {
-                world.spawn_prefab(
+                let e = world.spawn_prefab(
                     Position(Vec3::from_array(o.position)),
                     PrefabRef(o.prefab_id),
-                )
+                );
+                let _ = world.set_scale(e, Scale(Vec3::from_array(o.scale)));
+                let _ = world.set_rotation(e, Rotation(Vec3::from_array(o.rotation)));
+                e
             };
             entity_by_instance.insert(o.instance_id, e);
         }
@@ -87,7 +189,7 @@ impl EngineState {
         let mut vw = ChunkWorld::new(16);
         apply_terrain_layer(&mut vw, &level.terrain);
 
-        let script = ScriptHost::from_level(level);
+        let script = ScriptHost::from_level_with_base(level, asset_root);
 
         Self {
             world,
@@ -100,11 +202,25 @@ impl EngineState {
             time: 0.0,
             entity_by_instance,
             script,
+            last_cursor_pos: None,
+            mouse_pos: None,
+            mouse_delta: (0.0, 0.0),
+            key_w_down: false,
+            key_a_down: false,
+            key_s_down: false,
+            key_d_down: false,
+            key_space_down: false,
+            key_shift_down: false,
+            pending_cursor_commands: CursorCommands::default(),
         }
     }
 
     pub fn apply_level(&mut self, level: &Level) {
-        *self = Self::from_level(level);
+        *self = Self::from_level_with_asset_root(level, None);
+    }
+
+    pub fn apply_level_with_asset_root(&mut self, level: &Level, asset_root: Option<&Path>) {
+        *self = Self::from_level_with_asset_root(level, asset_root);
     }
 }
 
@@ -119,6 +235,8 @@ impl Default for EngineState {
             prefab_id: scene::ids::CAMERA,
             name: "Main camera".into(),
             position: [12.0, 14.0, 18.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
             visible: true,
             camera: Some(CameraAuthoring {
                 fov_deg: 45.0,
@@ -127,15 +245,19 @@ impl Default for EngineState {
                 active: true,
             }),
             script_asset_id: None,
+            model_asset_id: None,
         });
         level.objects.push(PlacedObject {
             instance_id: 1,
             prefab_id: scene::ids::SPAWN_POINT,
             name: "Spawn".into(),
             position: [3.0, 1.0, 2.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
             visible: true,
             camera: None,
             script_asset_id: None,
+            model_asset_id: None,
         });
         let mut s = Self::from_level(&level);
         s.world.spawn_with(
@@ -151,12 +273,76 @@ impl EngineState {
         self.world.system_integrate(FIXED_DT);
         self.physics.step();
         self.time += FIXED_DT;
+        let (mouse_dx, mouse_dy) = self.mouse_delta;
+        let mouse_pos = self.mouse_pos;
+        self.mouse_delta = (0.0, 0.0);
         if let Some(s) = &self.script {
             let map = &self.entity_by_instance;
-            if let Err(e) = s.tick(&mut self.world, map, FIXED_DT) {
+            let input = ScriptInput {
+                mouse_dx,
+                mouse_dy,
+                mouse_pos,
+                key_w: self.key_w_down,
+                key_a: self.key_a_down,
+                key_s: self.key_s_down,
+                key_d: self.key_d_down,
+                key_space: self.key_space_down,
+                key_shift: self.key_shift_down,
+            };
+            if let Err(e) = s.tick(&mut self.world, map, FIXED_DT, input) {
+                s.push_host_log(format!("[lua-error] {e}"));
                 tracing::warn!(target = "script", "lua tick: {e}");
             }
+            let cmds = s.drain_cursor_commands();
+            self.pending_cursor_commands.center_mouse |= cmds.center_mouse;
+            if cmds.cursor_visible.is_some() {
+                self.pending_cursor_commands.cursor_visible = cmds.cursor_visible;
+            }
         }
+    }
+
+    pub fn on_cursor_moved(&mut self, x: f64, y: f64) {
+        if let Some((lx, ly)) = self.last_cursor_pos {
+            self.mouse_delta.0 += (x - lx) as f32;
+            self.mouse_delta.1 += (y - ly) as f32;
+        }
+        self.mouse_pos = Some((x as f32, y as f32));
+        self.last_cursor_pos = Some((x, y));
+    }
+
+    pub fn on_mouse_motion(&mut self, dx: f64, dy: f64) {
+        self.mouse_delta.0 += dx as f32;
+        self.mouse_delta.1 += dy as f32;
+    }
+
+    pub fn set_key_down(&mut self, key: &str, down: bool) {
+        if key.eq_ignore_ascii_case("w") {
+            self.key_w_down = down;
+        } else if key.eq_ignore_ascii_case("a") {
+            self.key_a_down = down;
+        } else if key.eq_ignore_ascii_case("s") {
+            self.key_s_down = down;
+        } else if key.eq_ignore_ascii_case("d") {
+            self.key_d_down = down;
+        } else if key.eq_ignore_ascii_case("space") {
+            self.key_space_down = down;
+        } else if key.eq_ignore_ascii_case("shift") {
+            self.key_shift_down = down;
+        }
+    }
+
+    pub fn drain_script_logs(&self) -> Vec<String> {
+        if let Some(s) = &self.script {
+            s.drain_logs()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn take_cursor_commands(&mut self) -> CursorCommands {
+        let out = self.pending_cursor_commands;
+        self.pending_cursor_commands = CursorCommands::default();
+        out
     }
 
     /// First active camera rig in the world, if any.
@@ -188,6 +374,16 @@ impl EngineState {
         })
     }
 
+    pub fn free_view_projection(&self, aspect: f32) -> Mat4 {
+        let proj = Mat4::perspective_rh(45f32.to_radians(), aspect, 0.1, 200.0);
+        let (sy, cy) = self.pitch.sin_cos();
+        let (sx, cx) = self.yaw.sin_cos();
+        let forward = Vec3::new(cx * cy, sy, sx * cy);
+        let target = self.camera_pos + forward;
+        let view = Mat4::look_at_rh(self.camera_pos, target, Vec3::Y);
+        proj * view
+    }
+
     pub fn camera_sample_position(&self) -> Vec3 {
         self.world
             .camera_views()
@@ -196,7 +392,7 @@ impl EngineState {
             .unwrap_or(self.camera_pos)
     }
 
-    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 3]> {
+    pub fn voxel_instances_for_stream(&mut self) -> Vec<[f32; 9]> {
         let cam = self.camera_sample_position();
         let e = self.voxel_world.edge as i32;
         let cc = IVec3::new(
@@ -226,23 +422,26 @@ impl EngineState {
 
         let origin = Vec3::new((cc.x * e) as f32, (cc.y * e) as f32, (cc.z * e) as f32);
 
-        let mut inst: Vec<[f32; 3]> = self
+        let mut inst: Vec<[f32; 9]> = self
             .world
-            .positions()
-            .map(|(_, p)| [p.0.x, p.0.y, p.0.z])
+            .positions_non_camera()
+            .map(|(e, p)| {
+                let r = self.world.rotation_of(e).map(|r| r.0).unwrap_or(Vec3::ZERO);
+                let s = self.world.scale_of(e).map(|s| s.0).unwrap_or(Vec3::ONE);
+                [p.0.x, p.0.y, p.0.z, r.x, r.y, r.z, s.x, s.y, s.z]
+            })
             .collect();
 
-        let step = (self.mesh_scratch.positions.len() / 256).max(1);
-        for (i, p) in self.mesh_scratch.positions.iter().enumerate() {
-            if i % step == 0 {
-                let w = origin + *p;
-                inst.push([w.x, w.y, w.z]);
+        if show_debug_terrain_points() {
+            let step = (self.mesh_scratch.positions.len() / 256).max(1);
+            for (i, p) in self.mesh_scratch.positions.iter().enumerate() {
+                if i % step == 0 {
+                    let w = origin + *p;
+                    inst.push([w.x, w.y, w.z, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                }
             }
         }
 
-        if inst.is_empty() {
-            inst.push([0.0, 0.0, 0.0]);
-        }
         inst.truncate(MAX_INSTANCES);
         inst
     }
@@ -269,9 +468,12 @@ mod tests {
             prefab_id: ids::SPAWN_POINT,
             name: "Spawn".into(),
             position: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
             visible: true,
             camera: None,
             script_asset_id: None,
+            model_asset_id: None,
         });
         level.assets.push(AssetRecord {
             id: "lua1".into(),

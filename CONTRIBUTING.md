@@ -6,9 +6,13 @@
 2. If you use a **fork**, add the canonical repository as remote `upstream` and keep your default branch in sync with `upstream` before branching.
 3. Open **pull requests against the upstream default branch** (for example `main`) with a clear description and links to related issues when applicable.
 4. **Rebase or merge from upstream** as needed so the PR applies cleanly.
-5. Ensure **CI passes** (`cargo fmt`, `cargo clippy`, `cargo test`) before requesting review.
+5. Ensure **CI passes** before requesting review:
+   - `.github/workflows/pull-request.yml` for formatting, clippy, and tests
+   - `.github/workflows/main-build-release.yml` for main/release builds
+   - `.github/workflows/docs-pages.yml` for documentation deployment
 
 ## Code style
 
 - Run `cargo fmt --all` and `cargo clippy --workspace -- -D warnings` locally when possible.
 - Prefer small, reviewable PRs over large mixed-topic changes.
+- For docs-only PRs under `docs/**`, verify Sphinx output locally with `sphinx-build -b html docs/source docs/_build`.
