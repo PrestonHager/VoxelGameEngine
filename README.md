@@ -2,6 +2,12 @@
 
 Workspace layout matches [`agents.md`](agents.md): `ash`-based Vulkan rendering, custom ECS, chunked voxels + meshing, **editor + level JSON (`scene` crate)**, optional editor IPC, Lua scripting hooks, and Rapier3D physics.
 
+## Installation and Documentation
+
+Install via the latest [GitHub Release](https://github.com/PrestonHager/VoxelGameEngine/releases) for your platform, or build from source using the instructions below.
+
+Documentation can be found at [vge.prestonhager.com](https://vge.prestonhager.com) and is built from this repository.
+
 ## Prerequisites
 
 - **Rust** (stable, recent).
@@ -60,9 +66,19 @@ On **NixOS** or **Home Manager**, use the same overlay list under **`nixpkgs.ove
 Point the module system at **`nix/overlay.nix`** (absolute path or a path relative to your config entry):
 
 ```nix
-{ pkgs, ... }: {
+{ pkgs, ... }: let
+  version = "0.1.3"; # replace with latest version number
+  voxelSrc = pkgs.fetchFromGitHub {
+    owner = "PrestonHager";
+    repo = "VoxelGameEngine";
+    rev = "v${version}"; # or use 'main' for latest unstable version
+    # Use `nix-shell -p nix-prefetch-github --run "nix-prefetch-github PrestonHager VoxelGameEngine --rev main"`
+    # to get the hash and replace it below
+    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  };
+in {
   nixpkgs.overlays = [
-    (import /path/to/VoxelGameEngine/nix/overlay.nix)
+    (import "${voxelSrc}/nix/overlay.nix")
   ];
   environment.systemPackages = [ pkgs.vge-editor ];
 }
@@ -75,7 +91,26 @@ Rebuild and switch as usual (**`nixos-rebuild switch`**).
 From the **repository root**:
 
 ```bash
-nix-shell -E 'with import <nixpkgs> { overlays = [ (import ./nix/overlay.nix) ]; }; mkShell { packages = [ vge-editor ]; }'
+# Prefetch the hash and replace it in the fetch statement below
+nix-shell -p nix-prefetch-github --run "nix-prefetch-github PrestonHager VoxelGameEngine --rev main"
+# Run a nix shell with the package installed
+nix-shell -E '
+with import <nixpkgs> {
+  overlays = [
+    (import "${
+      builtins.fetchTarball {
+        url = "https://github.com/PrestonHager/VoxelGameEngine/archive/main.tar.gz";
+        sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      }
+    }/nix/overlay.nix")
+  ];
+};
+mkShell {
+  packages = [ vge-editor ];
+}
+'
+# Then open the editor window by running
+vge-editor
 ```
 
 See **`nix/overlay.nix`** for additional copy-paste examples.
