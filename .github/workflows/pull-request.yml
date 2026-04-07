@@ -8,6 +8,10 @@ on:
     paths-ignore:
       - "docs/**"
       - ".github/workflows/docs-pages.yml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
