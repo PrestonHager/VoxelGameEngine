@@ -67,7 +67,7 @@ Point the module system at **`nix/overlay.nix`** (absolute path or a path relati
 
 ```nix
 { pkgs, ... }: let
-  version = "v0.1.3"; # replace with latest version number
+  version = "0.1.3"; # replace with latest version number
   voxelSrc = pkgs.fetchFromGitHub {
     owner = "PrestonHager";
     repo = "VoxelGameEngine";
